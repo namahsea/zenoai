@@ -1,10 +1,14 @@
 import Anthropic from '@anthropic-ai/sdk';
+import { GoogleGenerativeAI } from '@google/generative-ai';
+import OpenAI from 'openai';
 import chalk from 'chalk';
 import { analyse } from './analyst.js';
+import type { ZenoConfig } from '../config.js';
 
 export interface RunOptions {
   role: string;
   action: string;
+  config: ZenoConfig;
 }
 
 interface RiskyFile {
@@ -21,6 +25,75 @@ interface HealthReport {
 const SYSTEM_PROMPT =
   'You are a senior software engineer reviewing a messy codebase. You will receive a structural summary of the project files. Return a JSON object with: healthScore (1–10), topRiskyFiles (array of max 5 objects with filename and oneLineReason), and observations (array of 3 plain-English strings about the codebase). Be direct and honest.';
 
+async function callAI(config: ZenoConfig, userMessage: string): Promise<string> {
+  const { provider, apiKey } = config;
+
+  if (provider === 'anthropic') {
+    const client = new Anthropic({ apiKey });
+    const response = await client.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 1024,
+      system: SYSTEM_PROMPT,
+      messages: [{ role: 'user', content: userMessage }],
+    });
+    const block = response.content[0];
+    if (block.type !== 'text') throw new Error('Unexpected response type from Anthropic');
+    return block.text;
+  }
+
+  if (provider === 'gemini') {
+    const genAI = new GoogleGenerativeAI(apiKey);
+    const model = genAI.getGenerativeModel({
+      model: 'gemini-2.5-pro',
+      systemInstruction: SYSTEM_PROMPT,
+    });
+    const result = await model.generateContent(userMessage);
+    return result.response.text();
+  }
+
+  if (provider === 'openai') {
+    const client = new OpenAI({ apiKey });
+    const response = await client.chat.completions.create({
+      model: 'gpt-4o',
+      max_tokens: 1024,
+      messages: [
+        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'user', content: userMessage },
+      ],
+    });
+    const text = response.choices[0]?.message?.content;
+    if (!text) throw new Error('Empty response from OpenAI');
+    return text;
+  }
+
+  if (provider === 'openrouter') {
+    const client = new OpenAI({
+      apiKey,
+      baseURL: 'https://openrouter.ai/api/v1',
+    });
+    const response = await client.chat.completions.create({
+      model: 'deepseek/deepseek-v3.2',
+      max_tokens: 1024,
+      messages: [
+        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'user', content: userMessage },
+      ],
+    });
+    const text = response.choices[0]?.message?.content;
+    if (!text) throw new Error('Empty response from OpenRouter');
+    return text;
+  }
+
+  throw new Error(`Unknown provider: ${provider}`);
+}
+
+const PROVIDER_LABELS: Record<string, string> = {
+  anthropic: 'Claude',
+  gemini: 'Gemini',
+  openai: 'GPT-4o',
+  openrouter: 'OpenRouter',
+};
+
 export async function runOrchestrator(opts: RunOptions): Promise<void> {
   console.log(chalk.dim(`role: ${opts.role}  |  action: ${opts.action}\n`));
 
@@ -32,29 +105,28 @@ export async function runOrchestrator(opts: RunOptions): Promise<void> {
     const files = allFiles.slice(0, 30);
     console.log(chalk.dim(`(${files.length} files)\n`));
 
-    process.stdout.write(chalk.yellow('Sending to Claude… '));
-    const client = new Anthropic();
+    const providerLabel = PROVIDER_LABELS[opts.config.provider] ?? opts.config.provider;
+    process.stdout.write(chalk.yellow(`Sending to ${providerLabel}… `));
+
+    const userMessage = `Project file summary (${files.length} files):\n\n${JSON.stringify(files, null, 2)}`;
 
     let raw: string;
     try {
-      const response = await client.messages.create({
-        model: 'claude-haiku-4-5-20251001',
-        max_tokens: 1024,
-        system: SYSTEM_PROMPT,
-        messages: [
-          {
-            role: 'user',
-            content: `Project file summary (${files.length} files):\n\n${JSON.stringify(files, null, 2)}`,
-          },
-        ],
-      });
-
-      const block = response.content[0];
-      if (block.type !== 'text') throw new Error('Unexpected response type from Claude');
-      raw = block.text;
+      raw = await callAI(opts.config, userMessage);
     } catch (err) {
-      console.log(chalk.red('failed'));
-      throw err;
+      console.log(chalk.red('failed\n'));
+      const msg = err instanceof Error ? err.message : String(err);
+      const lower = msg.toLowerCase();
+      if (lower.includes('credit balance') || lower.includes('400')) {
+        console.error(chalk.red('Your API key has no credits. Top up your account at the provider and try again.'));
+      } else if (lower.includes('invalid') || lower.includes('401')) {
+        console.error(chalk.red('Your API key looks incorrect. Run zenoai reset to enter a new one.'));
+      } else if (lower.includes('429')) {
+        console.error(chalk.red('You have hit the rate limit. Wait a moment and try again.'));
+      } else {
+        console.error(chalk.red('Something went wrong. Check your API key and internet connection and try again.'));
+      }
+      process.exit(1);
     }
 
     console.log(chalk.dim('done\n'));
@@ -66,7 +138,7 @@ export async function runOrchestrator(opts: RunOptions): Promise<void> {
     try {
       report = JSON.parse(cleaned) as HealthReport;
     } catch {
-      console.error(chalk.red('Failed to parse Claude response as JSON:'));
+      console.error(chalk.red('Failed to parse AI response as JSON:'));
       console.error(raw);
       process.exit(1);
     }
@@ -82,8 +154,7 @@ export async function runOrchestrator(opts: RunOptions): Promise<void> {
 
 function printReport(report: HealthReport, root: string, fileCount: number): void {
   const score = report.healthScore;
-  const scoreColor =
-    score >= 8 ? chalk.green : score >= 5 ? chalk.yellow : chalk.red;
+  const scoreColor = score >= 8 ? chalk.green : score >= 5 ? chalk.yellow : chalk.red;
 
   console.log(chalk.bold('━━━  ZENOAI — CODEBASE HEALTH REPORT  ━━━'));
   console.log(chalk.dim(`Directory: ${root}`));

@@ -1,12 +1,20 @@
 import { select } from '@inquirer/prompts';
 import chalk from 'chalk';
+import figlet from 'figlet';
+import { ensureConfig } from './config.js';
 import { runOrchestrator } from './core/orchestrator.js';
 
 const ROLES = ['SDE', 'EM', 'Architect', 'QA'] as const;
 const ACTIONS = ['Eyeball it', 'Deep dive', 'Complexity report'] as const;
 
 async function main() {
-  console.log(chalk.bold.cyan('\n  zenoai — drop a senior engineer into any codebase\n'));
+  const banner = figlet.textSync('ZENO', { font: 'Doom' });
+
+  console.log('\n\n\n' + chalk.hex('#F8F8F2')(banner));
+  console.log(chalk.hex('#F8F8F2')('Drop a senior engineer into any codebase.'));
+  console.log('');
+
+  const config = await ensureConfig();
 
   const role = await select({
     message: 'Your role:',
@@ -21,7 +29,7 @@ async function main() {
   });
 
   console.log('');
-  await runOrchestrator({ role, action });
+  await runOrchestrator({ role, action, config });
 }
 
 main().catch((err) => {
