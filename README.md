@@ -57,7 +57,7 @@ No global install needed. Just run it inside any JS/TS project.
 ## 🔄 How it works
 
 <p align="center">
-  <img src="https://raw.githubusercontent.com/namahsea/zenoai/master/assets/zeno-analysis-1.png" alt="How Zeno works" width="700"/>
+  <img src="https://raw.githubusercontent.com/namahsea/zenoai/master/assets/Zeno-analysis-1.png" alt="How Zeno works" width="700"/>
 </p>
 
 ---
