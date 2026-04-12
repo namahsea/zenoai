@@ -1,0 +1,33 @@
+{
+  "name": "zenoai",
+  "version": "0.1.0",
+  "description": "Drop a senior engineer into any codebase. Instantly.",
+  "type": "module",
+  "bin": {
+    "zenoai": "bin/zenoai.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js",
+    "run:env": "export $(grep -v '^#' .env | xargs) && node bin/zenoai.js"
+  },
+  "keywords": [],
+  "author": "namahc",
+  "license": "ISC",
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.82.0",
+    "@inquirer/prompts": "^8.4.1",
+    "chalk": "^5.6.2",
+    "typescript": "^6.0.2"
+  },
+  "devDependencies": {
+    "@types/node": "^25.5.2",
+    "tsx": "^4.21.0"
+  },
+  "files": [
+    "bin",
+    "dist",
+    "README.md"
+  ]
+}
