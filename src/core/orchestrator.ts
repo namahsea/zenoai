@@ -4,6 +4,8 @@ import OpenAI from 'openai';
 import chalk from 'chalk';
 import Table from 'cli-table3';
 import boxen from 'boxen';
+import { access } from 'node:fs/promises';
+import { join } from 'node:path';
 import { analyse } from './analyst.js';
 import { saveReport } from './cache.js';
 import type { ZenoConfig } from '../config.js';
@@ -146,6 +148,14 @@ export async function runOrchestrator(opts: RunOptions): Promise<void> {
     const allFiles = await analyse(root);
     const files = allFiles.slice(0, 30);
     console.log(chalk.dim(`(${files.length} files)\n`));
+
+    if (allFiles.length < 3) {
+      let hasPkgJson = false;
+      try { await access(join(root, 'package.json')); hasPkgJson = true; } catch { /* not found */ }
+      if (hasPkgJson) {
+        console.log(chalk.hex('#FFA500')(`Warning: only ${allFiles.length} file${allFiles.length === 1 ? '' : 's'} found — this may be incomplete. Make sure you are running zenoai from your project root.\n`));
+      }
+    }
 
     const providerLabel = PROVIDER_LABELS[opts.config.provider] ?? opts.config.provider;
     process.stdout.write(chalk.yellow(`Sending to ${providerLabel}… `));
