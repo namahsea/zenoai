@@ -5,37 +5,14 @@ import chalk from 'chalk';
 import Table from 'cli-table3';
 import boxen from 'boxen';
 import { analyse } from './analyst.js';
+import { saveReport } from './cache.js';
 import type { ZenoConfig } from '../config.js';
+import type { HealthReport, RiskLevel, HealthLabel } from '../types.js';
 
 export interface RunOptions {
   role: string;
   action: string;
   config: ZenoConfig;
-}
-
-type RiskLevel = 'Critical' | 'High' | 'Medium' | 'Low';
-type HealthLabel = 'Critical' | 'Concerning' | 'Fair' | 'Good' | 'Excellent';
-
-interface RiskyFile {
-  path: string;
-  risk: RiskLevel;
-  legibility: number;
-  consequence: string;
-}
-
-interface SuggestedAction {
-  action: string;
-  reason: string;
-}
-
-interface HealthReport {
-  healthScore: number;
-  healthLabel: HealthLabel;
-  healthContext: string;
-  riskyFiles: RiskyFile[];
-  observations: string[];
-  suggestedActions: SuggestedAction[];
-  startHere: string;
 }
 
 const SYSTEM_PROMPT = `You are a senior software engineer performing a rigorous codebase health review. You will receive a structural summary of project files. Return ONLY a valid JSON object — no markdown fences, no explanation — with exactly these fields:
@@ -209,6 +186,8 @@ export async function runOrchestrator(opts: RunOptions): Promise<void> {
     }
 
     printReport(report, root, files.length);
+    await saveReport(report, root, files.length);
+
     process.exit(0);
   }
 
