@@ -1,6 +1,6 @@
 {
   "name": "zenoai",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Drop a senior engineer into any codebase. Instantly.",
   "type": "module",
   "bin": {

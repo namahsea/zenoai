@@ -25,6 +25,7 @@
 
 ## 📰 News
 
+- **2026-04-14** 🚀 Released v0.1.5 — fix recursive directory walking using readdirSync with isFile()
 - **2026-04-14** 🚀 Released v0.1.4 — recursive file walking fix, symlink support, low-file-count warning
 - **2026-04-14** 🚀 Released v0.1.3 — risk table with legibility scores, suggested actions, HTML export
 - **2026-04-13** 🚀 Released v0.1.2 — ASCII banner, human-readable errors
