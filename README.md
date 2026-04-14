@@ -25,7 +25,8 @@
 
 ## 📰 News
 
-- **2026-04-13** 🚀 Released v0.1.2 — multi-provider support (Anthropic, Gemini, OpenRouter, OpenAI), ASCII banner, human-readable errors
+- **2026-04-13** 🚀 Released v0.1.2 — ASCII banner, human-readable errors
+- **2026-04-13** 🚀 Released v0.1.1 — multi-provider support (Anthropic, Gemini, OpenRouter, OpenAI)
 - **2026-04-12** 🎉 Released v0.1.0 — first public release, SDE persona, Eyeball it action
 
 ---
