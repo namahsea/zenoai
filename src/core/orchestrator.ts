@@ -144,16 +144,35 @@ export async function runOrchestrator(opts: RunOptions): Promise<void> {
   if (opts.role === 'SDE' && opts.action === 'Eyeball it') {
     const root = process.cwd();
 
-    process.stdout.write(chalk.yellow('Analysing project… '));
-    const allFiles = await analyse(root);
-    const files = allFiles.slice(0, 30);
-    console.log(chalk.dim(`(${files.length} files)\n`));
+    const MAX_SEND = 50;
 
-    if (allFiles.length < 3) {
+    process.stdout.write(chalk.yellow('Analysing project… '));
+    const { reports: allFiles, skipped } = await analyse(root);
+
+    // foundTotal counts everything before the send cap is applied
+    const foundTotal = allFiles.length + skipped.length;
+    const files = allFiles.slice(0, MAX_SEND);
+
+    // Track files dropped by the send cap so they appear in the transparency log
+    if (allFiles.length > MAX_SEND) {
+      for (const f of allFiles.slice(MAX_SEND)) {
+        skipped.push({ path: f.path, reason: `cap reached (${MAX_SEND} file limit)` });
+      }
+    }
+
+    let summary = `found (${foundTotal}) → sending (${files.length})`;
+    if (allFiles.length > MAX_SEND) summary += ` (capped at ${MAX_SEND})`;
+    console.log(chalk.dim(summary));
+    for (const s of skipped) {
+      console.log(chalk.dim(`  skipped: ${s.path} (${s.reason})`));
+    }
+    console.log('');
+
+    if (files.length < 3) {
       let hasPkgJson = false;
       try { await access(join(root, 'package.json')); hasPkgJson = true; } catch { /* not found */ }
       if (hasPkgJson) {
-        console.log(chalk.hex('#FFA500')(`Warning: only ${allFiles.length} file${allFiles.length === 1 ? '' : 's'} found — this may be incomplete. Make sure you are running zenoai from your project root.\n`));
+        console.log(chalk.hex('#FFA500')(`Warning: only ${files.length} file${files.length === 1 ? '' : 's'} found — this may be incomplete. Make sure you are running zenoai from your project root.\n`));
       }
     }
 

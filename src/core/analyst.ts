@@ -7,31 +7,46 @@ export interface FileReport {
   lines: number;
   functions: number;
   imports: number;
+  exports: number;
+  consoleLogs: number;
   hasTest: boolean;
 }
 
 const SKIP_DIRS = new Set(['node_modules', 'dist', '.git', '.next', 'coverage', 'out', 'build']);
 const VALID_EXTS = new Set(['.ts', '.js', '.tsx', '.jsx']);
-const MAX_LINES = 300;
-const MAX_FILES = 100;
+const DECL_RE = /\.d\.tsx?$/;
+
+export interface SkippedFile {
+  path: string;
+  reason: string;
+}
+
+export interface AnalyseResult {
+  reports: FileReport[];
+  skipped: SkippedFile[];
+}
 
 // Matches: function foo, async function foo, export function foo, export default function
 const FN_DECL_RE = /\bfunction\s+\w+\s*\(/g;
 // Matches arrow functions assigned to a variable/const/let: const foo = (...) =>
 const ARROW_RE = /(?:const|let|var)\s+\w+\s*=\s*(?:async\s+)?\(.*?\)\s*=>/g;
+// All export statements at line-start (named, default, re-exports, barrels)
+const EXPORT_RE = /^export\s/gm;
+// console.log calls anywhere in the file
+const CONSOLE_LOG_RE = /\bconsole\.log\b/g;
 
-function collectAllFiles(rootDir: string): string[] {
+function collectAllFiles(rootDir: string): { paths: string[]; skipped: SkippedFile[] } {
   let entries: import('node:fs').Dirent[];
   try {
     entries = readdirSync(rootDir, { withFileTypes: true, recursive: true });
   } catch {
-    return [];
+    return { paths: [], skipped: [] };
   }
 
-  const results: string[] = [];
-  for (const entry of entries) {
-    if (results.length >= MAX_FILES) break;
+  const paths: string[] = [];
+  const skipped: SkippedFile[] = [];
 
+  for (const entry of entries) {
     // Only want real files — isFile() follows symlinks on readdirSync entries
     if (!entry.isFile()) continue;
     if (!VALID_EXTS.has(extname(entry.name))) continue;
@@ -47,10 +62,16 @@ function collectAllFiles(rootDir: string): string[] {
     // Skip if any path segment is a directory we want to ignore
     if (parts.some(p => SKIP_DIRS.has(p))) continue;
 
-    results.push(fullPath);
+    // Skip auto-generated declaration files
+    if (DECL_RE.test(entry.name)) {
+      skipped.push({ path: relPath, reason: 'auto-generated' });
+      continue;
+    }
+
+    paths.push(fullPath);
   }
 
-  return results;
+  return { paths, skipped };
 }
 
 function countMatches(content: string, re: RegExp): number {
@@ -70,33 +91,37 @@ function testFileExists(filePath: string, allPaths: Set<string>): boolean {
   return false;
 }
 
-export async function analyse(projectRoot: string): Promise<FileReport[]> {
+export async function analyse(projectRoot: string): Promise<AnalyseResult> {
   // First pass: collect all paths so we can resolve test-file presence
-  const allPaths = new Set<string>(collectAllFiles(projectRoot));
+  const { paths, skipped } = collectAllFiles(projectRoot);
+  const allPaths = new Set<string>(paths);
 
   const reports: FileReport[] = [];
 
   for (const filePath of allPaths) {
-    if (reports.length >= MAX_FILES) break;
-
     let content: string;
     try {
       content = await readFile(filePath, 'utf8');
     } catch {
+      skipped.push({ path: relative(projectRoot, filePath), reason: 'unreadable' });
       continue;
     }
 
     const lines = content.split('\n').length;
-    if (lines > MAX_LINES) continue;
 
     reports.push({
       path: relative(projectRoot, filePath),
       lines,
       functions: countMatches(content, FN_DECL_RE) + countMatches(content, ARROW_RE),
       imports: countMatches(content, /^import\s/gm),
+      exports: countMatches(content, EXPORT_RE),
+      consoleLogs: countMatches(content, CONSOLE_LOG_RE),
       hasTest: testFileExists(filePath, allPaths),
     });
   }
 
-  return reports;
+  // Sort descending by risk score (lines × functions) so the caller's cap keeps the most complex files
+  reports.sort((a, b) => (b.lines * b.functions) - (a.lines * a.functions));
+
+  return { reports, skipped };
 }

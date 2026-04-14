@@ -25,6 +25,7 @@
 
 ## 📰 News
 
+- **2026-04-14** 🚀 Released v0.1.6 — smart file prioritisation, richer metadata signals, single send cap
 - **2026-04-14** 🚀 Released v0.1.5 — fix recursive directory walking using readdirSync with isFile()
 - **2026-04-14** 🚀 Released v0.1.4 — recursive file walking fix, symlink support, low-file-count warning
 - **2026-04-14** 🚀 Released v0.1.3 — risk table with legibility scores, suggested actions, HTML export
@@ -125,6 +126,19 @@ npx zenoai
 | Phase 1 — Eyeball it | ✅ Live | Read-only codebase health report |
 | Phase 2 — Fix it | 🔄 Coming soon | Autonomous refactoring with tests-first safety |
 | Phase 3 — Scale it | 🔜 Planned | No API key needed, Zeno handles everything |
+
+---
+
+## 📦 Changelog
+
+### v0.1.6
+- Recursive directory walking fixed — no more missed nested files
+- `.d.ts` / `.d.tsx` files excluded as auto-generated
+- Two new metadata signals — `exportCount` and `hasConsoleLog`
+- 300-line cap removed — line count is now a risk signal, not a gate
+- Smart prioritisation — files sorted by `lineCount × functionCount` before capping
+- Single `MAX_SEND = 50` cap in `orchestrator.ts` — one source of truth
+- Full transparency log — every skipped file shown with reason
 
 ---
 
