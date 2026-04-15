@@ -3,8 +3,6 @@
 </p>
 <h3 align="center">Drop a senior engineer into any codebase. Instantly.</h3>
 
----
-
 <p align="center">
   <a href="https://www.npmjs.com/package/zenoai"><img src="https://img.shields.io/npm/v/zenoai?color=50FA7B&label=npm" alt="npm version"/></a>
   <a href="https://www.npmjs.com/package/zenoai"><img src="https://img.shields.io/npm/dm/zenoai?color=BD93F9&label=downloads" alt="downloads"/></a>
@@ -12,8 +10,6 @@
   <a href="https://nodejs.org"><img src="https://img.shields.io/badge/node-%3E%3D18-8BE9FD" alt="node"/></a>
   <a href="https://twitter.com/zeno_cli"><img src="https://img.shields.io/badge/Twitter-%40zeno__cli-1DA1F2?logo=twitter&logoColor=white" alt="Twitter"/></a>
 </p>
-
----
 
 **Zeno** is an AI-powered CLI tool that analyses your JavaScript or TypeScript project and tells you exactly what is messy, what is risky, and where to start.
 
