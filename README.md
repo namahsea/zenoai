@@ -1,8 +1,9 @@
 <p align="center">
   <img src="https://raw.githubusercontent.com/namahsea/zenoai/main/assets/logo_2.png" alt="Zeno" width="400"/>
 </p>
-
 <h3 align="center">Drop a senior engineer into any codebase. Instantly.</h3>
+
+---
 
 <p align="center">
   <a href="https://www.npmjs.com/package/zenoai"><img src="https://img.shields.io/npm/v/zenoai?color=50FA7B&label=npm" alt="npm version"/></a>
@@ -22,8 +23,6 @@
 
 🔒 **Your key stays local.** API keys are stored only on your machine — never sent to our servers.
 
----
-
 ## 📰 News
 
 - **2026-04-14** 🚀 Released v0.1.6 — smart file prioritisation, richer metadata signals, single send cap
@@ -33,8 +32,6 @@
 - **2026-04-13** 🚀 Released v0.1.2 — ASCII banner, human-readable errors
 - **2026-04-13** 🚀 Released v0.1.1 — multi-provider support (Anthropic, Gemini, OpenRouter, OpenAI)
 - **2026-04-12** 🎉 Released v0.1.0 — first public release, SDE persona, Eyeball it action
-
----
 
 ## ✨ Key Features
 
@@ -48,8 +45,6 @@
 
 🛠️ **Zero config** — No config files, no IDE plugins, no setup. Just `npx zenoai`
 
----
-
 ## 🚀 Quick Start
 
 ```bash
@@ -58,15 +53,11 @@ npx zenoai
 
 No global install needed. Just run it inside any JS/TS project.
 
----
-
 ## 🔄 How it works
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/namahsea/zenoai/master/assets/Zeno-analysis-1.png" alt="How Zeno works" width="700"/>
 </p>
-
----
 
 ## 📊 Sample output
 
@@ -86,8 +77,6 @@ Observations:
   3. Your utility layer is doing too much
 ```
 
----
-
 ## 🔌 Supported AI providers
 
 Zeno works with your existing API key. Pick the provider you already have access to:
@@ -101,15 +90,11 @@ Zeno works with your existing API key. Pick the provider you already have access
 
 Your key is saved to `~/.zenoai/config.json` on first run. It never leaves your machine.
 
----
-
 ## 📋 Requirements
 
 - Node.js 18 or higher
 - A JavaScript or TypeScript project
 - An API key from any supported provider
-
----
 
 ## 🔁 Reset your API key
 
@@ -118,8 +103,6 @@ rm ~/.zenoai/config.json
 npx zenoai
 ```
 
----
-
 ## 🗺️ Roadmap
 
 | Phase | Status | Description |
@@ -127,8 +110,6 @@ npx zenoai
 | Phase 1 — Eyeball it | ✅ Live | Read-only codebase health report |
 | Phase 2 — Fix it | 🔄 Coming soon | Autonomous refactoring with tests-first safety |
 | Phase 3 — Scale it | 🔜 Planned | No API key needed, Zeno handles everything |
-
----
 
 ## 📦 Changelog
 
