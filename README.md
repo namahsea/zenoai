@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/namahsea/zenoai/master/assets/logo_2.png" alt="Zeno" width="400"/>
+  <img src="https://raw.githubusercontent.com/namahsea/zenoai/main/assets/logo_2.png" alt="Zeno" width="400"/>
 </p>
 
 <h3 align="center">Drop a senior engineer into any codebase. Instantly.</h3>
