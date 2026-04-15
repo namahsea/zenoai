@@ -1,10 +1,8 @@
-<h1 align="center">
-  <img src="https://raw.githubusercontent.com/namahsea/zenoai/main/assets/logo_2.png" alt="Zeno" height="72"/>
-  <br/>
-  zenoai
-</h1>
+<p align="center">
+  <img src="https://raw.githubusercontent.com/namahsea/zenoai/main/assets/logo_2.png" alt="Zeno" width="400"/>
+</p>
 
-<p align="center"><b>Drop a senior engineer into any codebase. Instantly.</b></p>
+<h3 align="center">Drop a senior engineer into any codebase. Instantly.</h3>
 
 <p align="center">
   <a href="https://www.npmjs.com/package/zenoai"><img src="https://img.shields.io/npm/v/zenoai?color=50FA7B&label=npm" alt="npm version"/></a>
