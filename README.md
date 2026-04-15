@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/namahsea/zenoai/master/assets/logo.png" alt="Zeno" width="400"/>
+  <img src="https://raw.githubusercontent.com/namahsea/zenoai/master/assets/logo_2.png" alt="Zeno" width="400"/>
 </p>
 
 <h3 align="center">Drop a senior engineer into any codebase. Instantly.</h3>
@@ -9,6 +9,7 @@
   <a href="https://www.npmjs.com/package/zenoai"><img src="https://img.shields.io/npm/dm/zenoai?color=00BFFF&label=downloads" alt="downloads"/></a>
   <a href="https://github.com/namahsea/zenoai/blob/master/LICENSE"><img src="https://img.shields.io/github/license/namahsea/zenoai?color=00BFFF" alt="license"/></a>
   <a href="https://nodejs.org"><img src="https://img.shields.io/badge/node-%3E%3D18-00BFFF" alt="node"/></a>
+  <a href="https://twitter.com/zeno_cli"><img src="https://img.shields.io/badge/Twitter-%40zeno__cli-00BFFF?logo=twitter&logoColor=white" alt="Twitter"/></a>
 </p>
 
 ---

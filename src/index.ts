@@ -49,10 +49,34 @@ async function main() {
     process.exit(0);
   }
 
+  const QUOTES = [
+    'You cannot refactor what you do not understand.',
+    'The codebase does not lie. It only reflects the decisions that built it.',
+    'Every file you are afraid to touch is a problem you have not solved yet.',
+    'Speed without structure is just debt with good marketing.',
+    'Complexity is not a sign of intelligence. It is a sign of unfinished thinking.',
+    'One function. One purpose. Everything else is negotiation.',
+    'The first step to fixing a mess is admitting it exists.',
+    'Code that works is not the same as code that lasts.',
+    'A function that does everything does nothing well.',
+    'The test you skip today is the bug you debug at 2am.',
+    'Understanding comes before changing. Always.',
+    'The best time to add a test was before you shipped. The second best time is now.',
+    'The mess did not appear overnight. Neither will the clarity.',
+    'A codebase you cannot explain is a codebase you do not own.',
+    'The simplest solution is usually the one you wrote last.',
+    'Every shortcut leaves a shadow. Zeno finds them.',
+    'Good code is not written. It is rewritten.',
+    'What you ship is a promise. Make sure you can keep it.',
+  ];
+  const quote = QUOTES[Math.floor(Math.random() * QUOTES.length)];
+
   const banner = figlet.textSync('ZENO', { font: 'Doom' });
 
   console.log('\n\n\n' + chalk.hex('#F8F8F2')(banner));
   console.log(chalk.hex('#F8F8F2')('Drop a senior engineer into any codebase.'));
+  console.log('');
+  console.log(chalk.hex('#6272A4')(quote));
   console.log('');
 
   const config = await ensureConfig();

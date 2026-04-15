@@ -4,6 +4,7 @@ import OpenAI from 'openai';
 import chalk from 'chalk';
 import Table from 'cli-table3';
 import boxen from 'boxen';
+import ora from 'ora';
 import { access } from 'node:fs/promises';
 import { join } from 'node:path';
 import { analyse } from './analyst.js';
@@ -112,12 +113,6 @@ async function callAI(config: ZenoConfig, userMessage: string): Promise<string> 
   throw new Error(`Unknown provider: ${provider}`);
 }
 
-const PROVIDER_LABELS: Record<string, string> = {
-  anthropic: 'Claude',
-  gemini: 'Gemini',
-  openai: 'GPT-4o',
-  openrouter: 'OpenRouter',
-};
 
 function riskColor(risk: RiskLevel): string {
   switch (risk) {
@@ -176,16 +171,58 @@ export async function runOrchestrator(opts: RunOptions): Promise<void> {
       }
     }
 
-    const providerLabel = PROVIDER_LABELS[opts.config.provider] ?? opts.config.provider;
-    process.stdout.write(chalk.yellow(`Sending to ${providerLabel}… `));
+    const LATE_MESSAGES = [
+      'mapping dependencies…',
+      'weighing your risks…',
+      'cross-referencing patterns…',
+      'finishing your report…',
+      'almost there…',
+    ];
+
+    function buildSpinnerText(elapsed: number, lateMsg: string): string {
+      let phase: string;
+      if (elapsed < 5)       phase = 'working…';
+      else if (elapsed < 10) phase = "this one's taking a moment…";
+      else                   phase = lateMsg;
+      return chalk.bold.white('Zeno') + chalk.dim(' — ') + chalk.hex('#FFB86C')(phase);
+    }
+
+    let elapsed = 0;
+    let lateMsg = LATE_MESSAGES[0];
+    let lateTimer: ReturnType<typeof setTimeout> | null = null;
+
+    function scheduleNextMessage(): void {
+      const delay = 2000 + Math.random() * 6000; // 2s – 8s, different every time
+      lateTimer = setTimeout(() => {
+        lateMsg = LATE_MESSAGES[Math.floor(Math.random() * LATE_MESSAGES.length)];
+        scheduleNextMessage();
+      }, delay);
+    }
+
+    const spinner = ora({ text: buildSpinnerText(0, lateMsg), color: 'yellow' }).start();
+
+    const tickInterval = setInterval(() => {
+      elapsed += 1;
+      if (elapsed === 10) scheduleNextMessage();
+      spinner.text = buildSpinnerText(elapsed, lateMsg);
+    }, 1000);
+
+    function clearSpinnerTimers(): void {
+      clearInterval(tickInterval);
+      if (lateTimer) clearTimeout(lateTimer);
+    }
 
     const userMessage = `Project file summary (${files.length} files):\n\n${JSON.stringify(files, null, 2)}`;
 
     let raw: string;
     try {
       raw = await callAI(opts.config, userMessage);
+      clearSpinnerTimers();
+      spinner.succeed(chalk.bold.white('Zeno') + chalk.dim(` — done (${elapsed}s)`));
     } catch (err) {
-      console.log(chalk.red('failed\n'));
+      clearSpinnerTimers();
+      spinner.fail(chalk.red('failed'));
+      console.log('');
       const msg = err instanceof Error ? err.message : String(err);
       const lower = msg.toLowerCase();
       if (lower.includes('credit balance') || lower.includes('400')) {
@@ -200,7 +237,6 @@ export async function runOrchestrator(opts: RunOptions): Promise<void> {
       process.exit(1);
     }
 
-    console.log(chalk.dim('done\n'));
 
     // Strip markdown code fences if present
     const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
@@ -226,14 +262,17 @@ export async function runOrchestrator(opts: RunOptions): Promise<void> {
 }
 
 function printReport(report: HealthReport, root: string, fileCount: number): void {
-  const date = new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+  const now = new Date();
+  const date = now.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+  const time = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
+  const datetime = `${date}, ${time}`;
   const labelFn = scoreChalk(report.healthLabel);
 
   // ── Header ──────────────────────────────────────────────────────────────────
   console.log(chalk.bold.white('━━━  ZENOAI — CODEBASE HEALTH REPORT  ━━━'));
   console.log(chalk.dim(`Directory : ${root}`));
   console.log(chalk.dim(`Files     : ${fileCount}`));
-  console.log(chalk.dim(`Date      : ${date}\n`));
+  console.log(chalk.dim(`Date      : ${datetime}\n`));
 
   // ── Health Score ─────────────────────────────────────────────────────────────
   console.log(chalk.bold('Health Score'));
