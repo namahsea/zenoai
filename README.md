@@ -21,6 +21,7 @@
 
 ## 📰 News
 
+- **2026-04-17** 🚀 Released v0.1.7 — structured JSON report schema, consequence-based risk anchors, directory guards, prompt clarifications
 - **2026-04-14** 🚀 Released v0.1.6 — smart file prioritisation, richer metadata signals, single send cap
 - **2026-04-14** 🚀 Released v0.1.5 — fix recursive directory walking using readdirSync with isFile()
 - **2026-04-14** 🚀 Released v0.1.4 — recursive file walking fix, symlink support, low-file-count warning
@@ -108,6 +109,14 @@ npx zenoai
 | Phase 3 — Scale it | 🔜 Planned | No API key needed, Zeno handles everything |
 
 ## 📦 Changelog
+
+### v0.1.7
+- Structured JSON report schema — renamed fields (`score`, `label`, `summary`, `files`, `actions`, `start`) for consistency
+- Consequence-based risk anchors in system prompt — Critical reflects production impact (auth, payments, data writes), not line count
+- "Where to start" anchored to highest-consequence action — never recommends logging cleanup over untested critical business logic
+- Markdown fence stripping before JSON parse — handles models that wrap responses in code blocks
+- Directory guards — blocks dangerous paths (home, `/`, `/usr`, `/etc`, `/var`, `/tmp`), warns on missing `package.json`
+- Post-analysis guards — exits on zero files, auto-generated-only results, or majority unreadable files; warns on large codebases (>100 files)
 
 ### v0.1.6
 - Recursive directory walking fixed — no more missed nested files
