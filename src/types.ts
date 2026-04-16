@@ -1,5 +1,5 @@
 export type RiskLevel = 'Critical' | 'High' | 'Medium' | 'Low';
-export type HealthLabel = 'Critical' | 'Concerning' | 'Fair' | 'Good' | 'Excellent';
+export type HealthLabel = 'Critical' | 'Concerning' | 'Fair' | 'Good';
 
 export interface RiskyFile {
   path: string;
@@ -9,16 +9,16 @@ export interface RiskyFile {
 }
 
 export interface SuggestedAction {
-  action: string;
-  reason: string;
+  instruction: string;
+  rationale: string;
 }
 
 export interface HealthReport {
-  healthScore: number;
-  healthLabel: HealthLabel;
-  healthContext: string;
-  riskyFiles: RiskyFile[];
+  score: number;
+  label: HealthLabel;
+  summary: string;
+  files: RiskyFile[];
   observations: string[];
-  suggestedActions: SuggestedAction[];
-  startHere: string;
+  actions: SuggestedAction[];
+  start: string;
 }

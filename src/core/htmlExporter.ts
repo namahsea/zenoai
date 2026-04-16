@@ -24,8 +24,7 @@ function labelClass(label: HealthLabel): string {
     case 'Critical':
     case 'Concerning': return 'label-bad';
     case 'Fair':       return 'label-fair';
-    case 'Good':
-    case 'Excellent':  return 'label-good';
+    case 'Good':       return 'label-good';
   }
 }
 
@@ -38,7 +37,7 @@ function legibilityClass(score: number): string {
 export function generateHtml(report: HealthReport, root: string, fileCount: number): string {
   const date = new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
 
-  const riskyFilesRows = (report.riskyFiles ?? []).map((f) => `
+  const riskyFilesRows = (report.files ?? []).map((f) => `
     <tr>
       <td class="file-path">${esc(f.path)}</td>
       <td><span class="${riskClass(f.risk)}">${esc(f.risk)}</span></td>
@@ -51,10 +50,10 @@ export function generateHtml(report: HealthReport, root: string, fileCount: numb
       <span class="obs-num">${i + 1}.</span>${esc(obs)}
     </div>`).join('');
 
-  const actionsHtml = (report.suggestedActions ?? []).map((item, i) => `
+  const actionsHtml = (report.actions ?? []).map((item, i) => `
     <div class="action-item">
-      <div class="action-title">${i + 1}. ${esc(item.action)}</div>
-      <div class="action-reason">${esc(item.reason)}</div>
+      <div class="action-title">${i + 1}. ${esc(item.instruction)}</div>
+      <div class="action-reason">${esc(item.rationale)}</div>
     </div>`).join('');
 
   return `<!DOCTYPE html>
@@ -244,13 +243,13 @@ export function generateHtml(report: HealthReport, root: string, fileCount: numb
 
   <div class="section">
     <div class="section-title">Health Score</div>
-    <div class="score-line ${labelClass(report.healthLabel)}">
-      ${report.healthScore} / 10 &nbsp; [${esc(report.healthLabel)}]
+    <div class="score-line ${labelClass(report.label)}">
+      ${report.score} / 10 &nbsp; [${esc(report.label)}]
     </div>
-    <div class="score-context">${esc(report.healthContext)}</div>
+    <div class="score-context">${esc(report.summary)}</div>
   </div>
 
-  ${report.riskyFiles?.length ? `
+  ${report.files?.length ? `
   <div class="section">
     <div class="section-title">Risky Files</div>
     <table>
@@ -272,17 +271,17 @@ export function generateHtml(report: HealthReport, root: string, fileCount: numb
     ${observationsHtml}
   </div>` : ''}
 
-  ${report.suggestedActions?.length ? `
+  ${report.actions?.length ? `
   <div class="section">
     <div class="section-title">Suggested Actions</div>
     ${actionsHtml}
   </div>` : ''}
 
-  ${report.startHere ? `
+  ${report.start ? `
   <div class="section">
     <div class="start-here-box">
       <div class="start-here-label">Where to start</div>
-      <div class="start-here-text">${esc(report.startHere)}</div>
+      <div class="start-here-text">${esc(report.start)}</div>
     </div>
   </div>` : ''}
 

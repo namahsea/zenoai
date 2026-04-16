@@ -18,13 +18,13 @@ export interface RunOptions {
   config: ZenoConfig;
 }
 
-const SYSTEM_PROMPT = `You are a senior software engineer performing a rigorous codebase health review. You will receive a structural summary of project files. Return ONLY a valid JSON object — no markdown fences, no explanation — with exactly these fields:
+const SYSTEM_PROMPT = `You are a senior software engineer performing a rigorous codebase health review. You will receive a structural summary of project files. Return ONLY a valid JSON object — no markdown, no backticks, no preamble — with exactly this structure:
 
 {
-  "healthScore": <integer 1–10>,
-  "healthLabel": <one of: "Critical" | "Concerning" | "Fair" | "Good" | "Excellent">,
-  "healthContext": <one sentence explaining what the score means specifically for this project>,
-  "riskyFiles": [
+  "score": <integer 1–10>,
+  "label": <one of: "Critical" | "Concerning" | "Fair" | "Good">,
+  "summary": <one sentence describing the overall codebase health>,
+  "files": [
     {
       "path": <relative file path>,
       "risk": <one of: "Critical" | "High" | "Medium" | "Low">,
@@ -33,23 +33,33 @@ const SYSTEM_PROMPT = `You are a senior software engineer performing a rigorous 
     }
   ],
   "observations": [
-    <3 specific, impactful strings — not generic, tied directly to patterns found in this codebase>
+    <observation one>,
+    <observation two>,
+    <observation three>
   ],
-  "suggestedActions": [
+  "actions": [
     {
-      "action": <what to do>,
-      "reason": <why this gives the highest value at lowest risk>
+      "instruction": <what to do>,
+      "rationale": <why this gives the highest value at lowest risk>
     }
   ],
-  "startHere": <one sentence naming the exact file to tackle first and why>
+  "start": <one sentence — the single most important place to begin>
 }
 
 Rules:
-- riskyFiles: up to 5 entries, ordered by descending risk severity.
-- observations: exactly 3 entries. Must reference actual filenames or patterns from the provided files.
-- suggestedActions: exactly 3 entries, ranked highest-value lowest-risk first.
-- healthLabel must align with healthScore: 1–2 → Critical, 3–4 → Concerning, 5–6 → Fair, 7–8 → Good, 9–10 → Excellent.
-- Be direct, specific, and honest. Avoid generic advice.`;
+- score must be an integer between 1 and 10.
+- label must match score exactly: 1–3 → Critical, 4–5 → Concerning, 6–7 → Fair, 8–10 → Good.
+- files must contain between 3 and 5 entries, ordered by risk descending.
+- observations must contain exactly 3 items, referencing actual filenames or patterns from the provided files.
+- actions must contain exactly 3 items, ranked highest-value lowest-risk first.
+- Return only the JSON object. No markdown fences, no backticks, no explanation.
+- Risk levels must reflect real-world consequence, not just file size:
+  - Critical: the file poses immediate production risk if changed or broken — auth, payments, data writes, webhooks.
+  - High: the file is complex and untested; changes are likely to introduce bugs that reach production.
+  - Medium: the file has quality issues but changes carry lower risk.
+  - Low: minor issues, safe to modify.
+  Do not assign Critical based on line count alone. A 200-line auth file with no tests is more Critical than a 600-line utility with no tests.
+- The "start" field must always recommend the highest-consequence action, not the easiest one. Prioritise files that handle payments, auth, data writes, or external APIs. Never recommend starting with logging cleanup or formatting changes when untested critical business logic exists in the codebase.`;
 
 async function callAI(config: ZenoConfig, userMessage: string): Promise<string> {
   const { provider, apiKey } = config;
@@ -128,15 +138,14 @@ function scoreChalk(label: HealthLabel): (text: string) => string {
     case 'Critical':
     case 'Concerning': return chalk.red;
     case 'Fair':       return chalk.yellow;
-    case 'Good':
-    case 'Excellent':  return chalk.green;
+    case 'Good':       return chalk.green;
   }
 }
 
 export async function runOrchestrator(opts: RunOptions): Promise<void> {
   console.log(chalk.dim(`role: ${opts.role}  |  action: ${opts.action}\n`));
 
-  if (opts.role === 'SDE' && opts.action === 'Eyeball it') {
+  if (opts.role === 'Senior Developer' && opts.action === 'Eyeball it') {
     const root = process.cwd();
 
     const MAX_SEND = 50;
@@ -147,6 +156,35 @@ export async function runOrchestrator(opts: RunOptions): Promise<void> {
     // foundTotal counts everything before the send cap is applied
     const foundTotal = allFiles.length + skipped.length;
     const files = allFiles.slice(0, MAX_SEND);
+
+    // Guard 4: only auto-generated files (more specific, checked before Guard 3)
+    if (files.length === 0 && skipped.every(s => s.reason === 'auto-generated')) {
+      console.log(chalk.red('\n⚠  Only auto-generated files found — no source code to analyse.'));
+      console.log(chalk.red('   Make sure you are running Zeno from your project root.\n'));
+      process.exit(1);
+    }
+
+    // Guard 3: zero files found
+    if (files.length === 0) {
+      console.log(chalk.red('\n⚠  No JavaScript or TypeScript files found.'));
+      console.log(chalk.red('   Make sure you are running Zeno from your project root.\n'));
+      process.exit(1);
+    }
+
+    // Guard 6: majority of files unreadable
+    const unreadableCount = skipped.filter(s => s.reason === 'unreadable').length;
+    if (unreadableCount > 0 && unreadableCount / (foundTotal) > 0.5) {
+      console.log(chalk.red(`\n⚠  Most files could not be read (${unreadableCount} skipped as unreadable).`));
+      console.log(chalk.red('   Check file permissions and try again.\n'));
+      process.exit(1);
+    }
+
+    // Guard 5: large codebase warning (non-fatal)
+    if (foundTotal > 100) {
+      console.log(chalk.yellow(`⚠  Large codebase detected (${foundTotal} files found).`));
+      console.log(chalk.yellow('   Zeno is sending the 50 highest-risk files for analysis.'));
+      console.log(chalk.yellow('   For best results, consider running from a specific subdirectory.\n'));
+    }
 
     // Track files dropped by the send cap so they appear in the transparency log
     if (allFiles.length > MAX_SEND) {
@@ -238,15 +276,13 @@ export async function runOrchestrator(opts: RunOptions): Promise<void> {
     }
 
 
-    // Strip markdown code fences if present
-    const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '').trim();
-
     let report: HealthReport;
     try {
+      const cleaned = raw.trim().replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/, '');
       report = JSON.parse(cleaned) as HealthReport;
     } catch {
-      console.error(chalk.red('Failed to parse AI response as JSON:'));
-      console.error(raw);
+      console.warn(chalk.yellow('Warning: could not parse structured report — showing raw output'));
+      console.log(raw);
       process.exit(1);
     }
 
@@ -266,7 +302,7 @@ function printReport(report: HealthReport, root: string, fileCount: number): voi
   const date = now.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
   const time = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
   const datetime = `${date}, ${time}`;
-  const labelFn = scoreChalk(report.healthLabel);
+  const labelFn = scoreChalk(report.label);
 
   // ── Header ──────────────────────────────────────────────────────────────────
   console.log(chalk.bold.white('━━━  ZENOAI — CODEBASE HEALTH REPORT  ━━━'));
@@ -276,11 +312,11 @@ function printReport(report: HealthReport, root: string, fileCount: number): voi
 
   // ── Health Score ─────────────────────────────────────────────────────────────
   console.log(chalk.bold('Health Score'));
-  console.log(`  ${chalk.bold(labelFn(`${report.healthScore} / 10`))}  ${labelFn(`[${report.healthLabel}]`)}`);
-  console.log(`  ${chalk.dim(report.healthContext)}\n`);
+  console.log(`  ${chalk.bold(labelFn(`${report.score} / 10`))}  ${labelFn(`[${report.label}]`)}`);
+  console.log(`  ${chalk.dim(report.summary)}\n`);
 
   // ── Risky Files table ────────────────────────────────────────────────────────
-  if (report.riskyFiles && report.riskyFiles.length > 0) {
+  if (report.files && report.files.length > 0) {
     console.log(chalk.bold('Risky Files'));
 
     const table = new Table({
@@ -295,7 +331,7 @@ function printReport(report: HealthReport, root: string, fileCount: number): voi
       style: { head: [], border: ['dim'] },
     });
 
-    for (const f of report.riskyFiles) {
+    for (const f of report.files) {
       table.push([
         chalk.cyan(f.path),
         riskColor(f.risk),
@@ -318,18 +354,18 @@ function printReport(report: HealthReport, root: string, fileCount: number): voi
   }
 
   // ── Suggested Actions ─────────────────────────────────────────────────────────
-  if (report.suggestedActions && report.suggestedActions.length > 0) {
+  if (report.actions && report.actions.length > 0) {
     console.log(chalk.bold('Suggested Actions'));
-    report.suggestedActions.forEach((item, i) => {
-      console.log(`  ${chalk.white.bold(`${i + 1}.`)} ${item.action}`);
-      console.log(`     ${chalk.dim(item.reason)}`);
+    report.actions.forEach((item, i) => {
+      console.log(`  ${chalk.white.bold(`${i + 1}.`)} ${item.instruction}`);
+      console.log(`     ${chalk.dim(item.rationale)}`);
     });
     console.log('');
   }
 
   // ── Start Here ────────────────────────────────────────────────────────────────
-  if (report.startHere) {
-    const box = boxen(chalk.bold.white('Where to start\n\n') + report.startHere, {
+  if (report.start) {
+    const box = boxen(chalk.bold.white('Where to start\n\n') + report.start, {
       padding: { top: 0, bottom: 0, left: 2, right: 2 },
       borderStyle: 'round',
       borderColor: 'yellow',

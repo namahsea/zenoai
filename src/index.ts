@@ -1,16 +1,65 @@
-import { select } from '@inquirer/prompts';
+import { select, confirm } from '@inquirer/prompts';
 import chalk from 'chalk';
-import figlet from 'figlet';
+import { existsSync, readFileSync } from 'node:fs';
 import { writeFile, mkdir } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import os from 'node:os';
+import { resolve, basename, join, sep } from 'node:path';
 import { exec } from 'node:child_process';
+import ora from 'ora';
 import { ensureConfig } from './config.js';
 import { runOrchestrator } from './core/orchestrator.js';
 import { loadReport } from './core/cache.js';
 import { generateHtml } from './core/htmlExporter.js';
 
-const ROLES = ['SDE', 'EM', 'Architect', 'QA'] as const;
-const ACTIONS = ['Eyeball it', 'Deep dive', 'Complexity report'] as const;
+const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
+
+const ROLES = [
+  'Senior Developer',
+  // 'EM',
+  // 'Architect',
+  // 'QA',
+] as const;
+const ACTIONS = [
+  'Eyeball it',
+  // 'Deep dive',
+  // 'Complexity report',
+] as const;
+
+type GuardResult =
+  | { status: 'ok'; selfRun: boolean }
+  | { status: 'dangerous-path'; cwd: string }
+  | { status: 'no-package-json' };
+
+function checkProjectDirectory(): GuardResult {
+  const cwd = process.cwd();
+  const home = os.homedir();
+  const dangerousPaths = [
+    home,
+    '/',
+    '/usr',
+    '/etc',
+    '/var',
+    '/tmp',
+  ];
+  if (cwd === home || dangerousPaths.slice(1).some(p => cwd === p || cwd.startsWith(p + sep))) {
+    return { status: 'dangerous-path', cwd };
+  }
+
+  const pkgJsonPath = join(cwd, 'package.json');
+  if (!existsSync(pkgJsonPath) && !existsSync(join(cwd, '..', 'package.json'))) {
+    return { status: 'no-package-json' };
+  }
+
+  let selfRun = false;
+  if (existsSync(pkgJsonPath)) {
+    try {
+      const pkg = JSON.parse(readFileSync(pkgJsonPath, 'utf8')) as { name?: string };
+      selfRun = pkg.name === 'zenoai';
+    } catch { /* ignore malformed package.json */ }
+  }
+
+  return { status: 'ok', selfRun };
+}
 
 async function main() {
   const args = process.argv.slice(2);
@@ -71,20 +120,59 @@ async function main() {
   ];
   const quote = QUOTES[Math.floor(Math.random() * QUOTES.length)];
 
-  const banner = figlet.textSync('ZENO', { font: 'Doom' });
+  const banner = `░█████████
+      ░██
+     ░██    ░███████  ░████████   ░███████
+   ░███    ░██    ░██ ░██    ░██ ░██    ░██
+  ░██      ░█████████ ░██    ░██ ░██    ░██
+ ░██       ░██        ░██    ░██ ░██    ░██
+░█████████  ░███████  ░██    ░██  ░███████  `;
 
-  console.log('\n\n\n' + chalk.hex('#F8F8F2')(banner));
-  console.log(chalk.hex('#F8F8F2')('Drop a senior engineer into any codebase.'));
+  console.log('\n\n' + chalk.hex('#F8F8F2')(banner));
   console.log('');
+  console.log('');
+  // console.log(chalk.hex('#F8F8F2')('Drop a senior engineer into any codebase.'));
+  console.log(chalk.hex('#F8F8F2')(`💎 Zeno v${version}`));
   console.log(chalk.hex('#6272A4')(quote));
   console.log('');
 
+  const guardSpinner = ora({ text: 'Checking project directory...', color: 'cyan' }).start();
+
+  const [guardResult] = await Promise.all([
+    Promise.resolve(checkProjectDirectory()),
+    new Promise<void>(resolve => setTimeout(resolve, 3000)),
+  ]);
+
+  if (guardResult.status === 'dangerous-path') {
+    guardSpinner.fail('Not a project directory.');
+    console.log(chalk.red('\n⚠  Zeno must be run from inside a project directory.'));
+    console.log(chalk.red('   Current directory: ' + guardResult.cwd));
+    console.log(chalk.red('   Navigate to your project root and try again.\n'));
+    process.exit(1);
+  }
+
+  if (guardResult.status === 'no-package-json') {
+    guardSpinner.fail('No package.json found.');
+    console.log(chalk.yellow('\n⚠  No package.json found in this directory.'));
+    console.log(chalk.yellow('   Zeno works best when run from your project root.'));
+    const proceed = await confirm({ message: 'Continue anyway?', default: false });
+    if (!proceed) process.exit(1);
+    console.log('');
+  }
+
+  guardSpinner.stop();
+
+  if (guardResult.status === 'ok' && guardResult.selfRun) {
+    console.log(chalk.yellow('⚠  Looks like you\'re running Zeno on itself. That\'s very meta. Results may be biased.\n'));
+  }
+
   const config = await ensureConfig();
 
+  const projectName = basename(process.cwd());
   const role = await select({
-    message: 'Your role:',
+    message: `Who do you want to review ${projectName}?`,
     choices: ROLES.map((r) => ({ value: r })),
-    default: 'SDE',
+    default: 'Senior Developer',
   });
 
   const action = await select({
