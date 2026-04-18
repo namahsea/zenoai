@@ -7,6 +7,10 @@ import { confirm } from '@inquirer/prompts';
 
 const execAsync = promisify(exec);
 
+async function runCommand(cmd: string): Promise<{ stdout: string; stderr: string }> {
+  return execAsync(cmd, { cwd: process.cwd() });
+}
+
 const MANIFEST_FILENAME = '.zeno-manifest.json';
 const MANIFEST_GITIGNORE_ENTRY = MANIFEST_FILENAME;
 
@@ -90,20 +94,14 @@ export async function runPreflight(): Promise<PreflightResult> {
     await initialiseGitRepo(cwd);
   }
 
-  // 2 & 3. Dirty tree + untracked files
-  try {
-    const { stdout } = await execAsync('git status --porcelain', { cwd });
-    if (stdout.trim()) {
-      warnings.push('You have uncommitted changes. Zeno will create its own branch but your changes will still be visible in git status.');
-    }
-    if (stdout.split('\n').some(line => line.startsWith('??'))) {
-      warnings.push('You have untracked files. These will not be affected by Zeno but will appear in git status.');
-    }
-  } catch {
-    // non-fatal — proceed without dirty-tree info
+  // 2. Dirty tree check — hard block
+  const statusCmd = await runCommand('git status --porcelain');
+  if (statusCmd.stdout.trim().length > 0) {
+    errors.push('You have uncommitted changes. Please run: git add . && git commit -m "your message" — then try Zeno again.');
+    return { passed: false, branch, manifestPath, errors, warnings };
   }
 
-  // 4. Branch creation
+  // 3. Branch creation
   const { stdout: currentBranchStdout } = await execAsync('git branch --show-current', { cwd });
   const originalBranch = currentBranchStdout.trim();
 
@@ -156,22 +154,25 @@ export async function runPreflight(): Promise<PreflightResult> {
 }
 
 export async function rollback(manifestPath: string): Promise<void> {
-  const cwd = process.cwd();
-  const manifestRaw = await readFile(manifestPath, 'utf8');
-  const manifestRecord = JSON.parse(manifestRaw) as ZenoManifest;
+  try {
+    const manifestContent = await readFile(manifestPath, 'utf8');
+    const manifest = JSON.parse(manifestContent) as ZenoManifest;
 
-  for (const file of manifestRecord.files) {
-    await rollbackFile(file, cwd);
+    // Step 1 — destroy all changes on the zeno branch
+    await runCommand('git reset --hard HEAD');
+
+    // Step 2 — return to the original branch
+    await runCommand(`git checkout ${manifest.originalBranch}`);
+
+    // Step 3 — delete the zeno branch
+    await runCommand(`git branch -D ${manifest.branch}`);
+
+    // Step 4 — delete the manifest
+    await rm(manifestPath, { force: true });
+
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error('Rollback failed:', msg);
+    throw err;
   }
-
-  await unlink(manifestPath).catch(err =>
-    console.error('Failed to delete manifest:', err),
-  );
-
-  await execAsync(`git checkout ${manifestRecord.originalBranch}`, { cwd }).catch(err =>
-    console.error(`Failed to checkout ${manifestRecord.originalBranch}:`, err),
-  );
-  await execAsync(`git branch -D ${manifestRecord.branch}`, { cwd }).catch(err =>
-    console.error(`Failed to delete branch ${manifestRecord.branch}:`, err),
-  );
 }

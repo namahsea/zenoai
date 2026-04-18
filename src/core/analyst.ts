@@ -1,6 +1,6 @@
 import { readdirSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { join, relative, extname, basename, dirname, sep } from 'node:path';
+import { join, relative, resolve, extname, basename, dirname, sep } from 'node:path';
 
 export interface FileReport {
   path: string;
@@ -21,9 +21,18 @@ export interface SkippedFile {
   reason: string;
 }
 
+export interface DependencyGraph {
+  order: string[];
+  importerCount: Record<string, number>;
+  importedBy: Record<string, string[]>;
+}
+
+export type FileMetadata = FileReport;
+
 export interface AnalyseResult {
   reports: FileReport[];
   skipped: SkippedFile[];
+  graph: DependencyGraph;
 }
 
 // Matches: function foo, async function foo, export function foo, export default function
@@ -91,6 +100,53 @@ function testFileExists(filePath: string, allPaths: Set<string>): boolean {
   return false;
 }
 
+const LOCAL_IMPORT_RE = /(?:import|require)\s*(?:.*from\s*)?['"`](\.{1,2}\/[^'"`\s]+)['"`]/gm;
+const RESOLVE_EXTS = ['.ts', '.tsx', '.js', '.jsx'];
+
+export async function buildDependencyGraph(files: FileMetadata[], projectRoot: string): Promise<DependencyGraph> {
+  const knownPaths = new Set(files.map(f => f.path));
+  const importedBy: Record<string, string[]> = Object.fromEntries(files.map(f => [f.path, []]));
+
+  for (const file of files) {
+    let source: string;
+    try {
+      source = await readFile(join(projectRoot, file.path), 'utf8');
+    } catch {
+      continue;
+    }
+
+    const fileDir = dirname(join(projectRoot, file.path));
+    for (const match of source.matchAll(LOCAL_IMPORT_RE)) {
+      const importSpecifier = match[1];
+      const absResolved = resolve(fileDir, importSpecifier);
+      const rel = relative(projectRoot, absResolved);
+
+      if (knownPaths.has(rel)) {
+        importedBy[rel].push(file.path);
+        continue;
+      }
+
+      for (const ext of RESOLVE_EXTS) {
+        const withExt = rel + ext;
+        if (knownPaths.has(withExt)) {
+          importedBy[withExt].push(file.path);
+          break;
+        }
+      }
+    }
+  }
+
+  const importerCount: Record<string, number> = Object.fromEntries(
+    files.map(f => [f.path, importedBy[f.path].length]),
+  );
+
+  const order = files.map(f => f.path).sort(
+    (a, b) => (importerCount[a] ?? 0) - (importerCount[b] ?? 0),
+  );
+
+  return { order, importerCount, importedBy };
+}
+
 export async function analyse(projectRoot: string): Promise<AnalyseResult> {
   // First pass: collect all paths so we can resolve test-file presence
   const { paths, skipped } = collectAllFiles(projectRoot);
@@ -123,5 +179,7 @@ export async function analyse(projectRoot: string): Promise<AnalyseResult> {
   // Sort descending by risk score (lines × functions) so the caller's cap keeps the most complex files
   reports.sort((a, b) => (b.lines * b.functions) - (a.lines * a.functions));
 
-  return { reports, skipped };
+  const graph = await buildDependencyGraph(reports, projectRoot);
+
+  return { reports, skipped, graph };
 }

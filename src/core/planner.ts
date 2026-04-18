@@ -36,7 +36,7 @@ function buildCompactFileSummary(
   return {
     path,
     importerCount: graph.importerCount[path] ?? 0,
-    importedBy: (graph.importedBy[path] ?? []).filter(p => candidateFileSet.has(p)),
+    importedBy: (graph.importedBy[path] ?? []).filter((p: string) => candidateFileSet.has(p)),
     lineCount: report?.lines ?? 0,
     functionCount: report?.functions ?? 0,
     hasTests: report?.hasTest ?? false,
@@ -57,7 +57,7 @@ export async function runPlanner(
   graph: DependencyGraph,
   reports: FileReport[],
   action: 'humanise' | 'slim' | 'stress-test',
-  maxFiles: number = 10,
+  maxFiles: number = 5,
 ): Promise<PlannerResult> {
   const skippedFiles: Array<{ path: string; reason: string }> = [];
   const reportByPath = new Map(reports.map(report => [report.path, report]));

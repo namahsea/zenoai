@@ -5,10 +5,17 @@ import chalk from 'chalk';
 import Table from 'cli-table3';
 import boxen from 'boxen';
 import ora from 'ora';
-import { access } from 'node:fs/promises';
-import { join } from 'node:path';
+import { access, readFile, writeFile } from 'node:fs/promises';
+import { join, basename } from 'node:path';
 import { analyse } from './analyst.js';
 import { saveReport } from './cache.js';
+import { runPreflight } from './preflight.js';
+import { runPlanner } from './planner.js';
+import { runReviewer } from './reviewer.js';
+import { runValidator } from './validator.js';
+import type { ValidatorResult } from './validator.js';
+import { confirm } from '@inquirer/prompts';
+import { runDiffer } from './differ.js';
 import type { ZenoConfig } from '../config.js';
 import type { HealthReport, RiskLevel, HealthLabel } from '../types.js';
 
@@ -382,4 +389,67 @@ function legibilityColor(score: number): string {
   if (score >= 8) return chalk.green(String(score));
   if (score >= 5) return chalk.yellow(String(score));
   return chalk.red(String(score));
+}
+
+export async function runPhase2(
+  projectPath: string,
+  action: 'humanise' | 'slim' | 'stress-test',
+  persona: string,
+): Promise<void> {
+  // Step 1 — preflight
+  const preflight = await runPreflight();
+  if (!preflight.passed) {
+    console.error(chalk.red('Cannot start — ' + preflight.errors.join(', ')));
+    process.exit(1);
+  }
+
+  // Step 2 — analyst
+  const spinner = ora('Analysing codebase...').start();
+  const { reports, graph } = await analyse(projectPath);
+  spinner.succeed(`Found ${reports.length} files`);
+
+  // Step 3 — planner
+  spinner.start('Planning safe refactor order...');
+  const plan = await runPlanner(graph, reports, action);
+  spinner.succeed(`Selected ${plan.selectedFiles.length} files to refactor`);
+
+  if (plan.selectedFiles.length === 0) {
+    console.log(chalk.yellow('No files selected for this action. Try a different action or project.'));
+    process.exit(0);
+  }
+
+  // [COST_DISPLAY] — remove or comment this block when subscription model is active
+  const estimatedCost = (plan.selectedFiles.length * 0.12).toFixed(2);
+  console.log(chalk.yellow(`Estimated API cost: ~$${estimatedCost} (${plan.selectedFiles.length} files × 2 calls)`));
+  const proceedWithCost = await confirm({ message: 'Proceed with this run?', default: true });
+  if (!proceedWithCost) {
+    console.log(chalk.yellow('Run cancelled.'));
+    process.exit(0);
+  }
+  // [/COST_DISPLAY]
+
+  // Step 4 — reviewer + validator loop
+  const results: ValidatorResult[] = [];
+  for (const filePath of plan.selectedFiles) {
+    spinner.start(`Reviewing ${basename(filePath)}...`);
+    const reviewed = await runReviewer(filePath, action);
+
+    if (reviewed.skip) {
+      spinner.warn(`Skipped ${basename(filePath)}: ${reviewed.skipReason}`);
+      continue;
+    }
+
+    spinner.start(`Validating ${basename(filePath)}...`);
+    const validated = await runValidator(filePath, reviewed.changes, action);
+    spinner.succeed(`${basename(filePath)} — score ${validated.confidenceScore}`);
+    results.push(validated);
+  }
+
+  // Step 5 — differ
+  const manifest = JSON.parse(await readFile(preflight.manifestPath, 'utf8')) as Record<string, unknown>;
+  manifest['action'] = action;
+  manifest['persona'] = persona;
+  await writeFile(preflight.manifestPath, JSON.stringify(manifest, null, 2));
+
+  await runDiffer(results, manifest as unknown as Parameters<typeof runDiffer>[1], preflight.manifestPath);
 }

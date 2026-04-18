@@ -26,55 +26,8 @@ export async function runValidator(
 
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-  // Step 2 — generate tests via Claude
-  // Note: generated tests capture behavioral intent but will likely require
-  // mock context (Prisma, Stripe, email services) to execute successfully.
-  // Test execution and mock wiring deferred to next iteration.
-  const testSystemPrompt = `You are generating a behavioral test file for a TypeScript module.
-Goal: capture the current behavior so any regression after refactoring is caught.
-
-Rules:
-- Use Jest syntax
-- Do not test implementation details. Test outputs and side effects only.
-- Write only what you can infer from the code. Do not invent behavior.
-- If the file has no testable exports, return { "skippable": true }
-- Otherwise return { "skippable": false, "testSource": "<full test file source>" }
-
-Strict Output Requirements:
-- Return ONLY valid JSON. No markdown, no backticks, no explanations.
-- Start with { and end with }.`;
-
-  const testResponse = await client.messages.create({
-    model: 'claude-sonnet-4-6',
-    max_tokens: 2000,
-    system: testSystemPrompt,
-    messages: [{ role: 'user', content: rawSource }],
-  });
-
-  const testBlock = testResponse.content[0];
-  let testable = false;
-
-  if (testBlock.type === 'text') {
-    const raw = testBlock.text;
-    const start = raw.indexOf('{');
-    const end = raw.lastIndexOf('}');
-    if (start !== -1 && end !== -1) {
-      try {
-        const parsed = JSON.parse(raw.substring(start, end + 1)) as {
-          skippable: boolean;
-          testSource?: string;
-        };
-        if (!parsed.skippable && parsed.testSource) {
-          await fs.writeFile(`${filePath}.zeno-test.ts`, parsed.testSource, 'utf8');
-          testable = true;
-        }
-      } catch {
-        // non-fatal — proceed without test file
-      }
-    }
-  }
-
-  // TODO: wire test runner execution in next iteration
+  // TODO: wire test generation and execution in next iteration
+  const testable = false;
 
   // Step 3 — apply refactor via Claude
   const refactorSystemPrompt = `You are a senior TypeScript engineer rewriting a file for clarity and maintainability.
