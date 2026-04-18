@@ -42,9 +42,19 @@ async function initialiseGitRepo(cwd: string): Promise<void> {
 async function rollbackFile(file: ZenoManifest['files'][number], cwd: string): Promise<void> {
   if (file.status === 'accepted') {
     if (file.operation === 'modified') {
-      await execAsync(`git checkout HEAD -- ${file.path}`, { cwd }).catch(err =>
-        console.error(`Failed to restore ${file.path}:`, err),
-      );
+      const isTracked = await execAsync(`git ls-files --error-unmatch "${file.path}"`, { cwd })
+        .then(() => true)
+        .catch(() => false);
+
+      if (isTracked) {
+        await execAsync(`git checkout HEAD -- "${file.path}"`, { cwd }).catch(err =>
+          console.error(`Failed to restore ${file.path}:`, err),
+        );
+      } else {
+        await rm(join(cwd, file.path), { force: true }).catch(err =>
+          console.error(`Failed to delete untracked file ${file.path}:`, err),
+        );
+      }
     } else if (file.operation === 'created') {
       await rm(join(cwd, file.path), { force: true }).catch(err =>
         console.error(`Failed to delete created file ${file.path}:`, err),
