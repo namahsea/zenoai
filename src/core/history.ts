@@ -3,9 +3,18 @@ import { join, relative } from 'node:path';
 
 export interface RefactorHistory {
   actions: {
-    humanise: string[];
-    slim: string[];
-    'stress-test': string[];
+    humanise: {
+      accepted: string[];
+      skipped: Array<{ path: string; reason: string }>;
+    };
+    slim: {
+      accepted: string[];
+      skipped: Array<{ path: string; reason: string }>;
+    };
+    'stress-test': {
+      accepted: string[];
+      skipped: Array<{ path: string; reason: string }>;
+    };
   };
   lastRunAt: string;
 }
@@ -13,30 +22,43 @@ export interface RefactorHistory {
 const HISTORY_FILENAME = '.zeno-history.json';
 const GITIGNORE_ENTRY = '.zeno-history.json';
 
-const EMPTY_HISTORY: RefactorHistory = {
-  actions: { humanise: [], slim: [], 'stress-test': [] },
-  lastRunAt: '',
-};
+function emptyHistory(): RefactorHistory {
+  return {
+    actions: {
+      humanise: { accepted: [], skipped: [] },
+      slim: { accepted: [], skipped: [] },
+      'stress-test': { accepted: [], skipped: [] },
+    },
+    lastRunAt: '',
+  };
+}
 
 export async function loadHistory(projectRoot: string): Promise<RefactorHistory> {
   try {
     const raw = await readFile(join(projectRoot, HISTORY_FILENAME), 'utf8');
     return JSON.parse(raw) as RefactorHistory;
   } catch {
-    return { ...EMPTY_HISTORY, actions: { humanise: [], slim: [], 'stress-test': [] } };
+    return emptyHistory();
   }
 }
 
 export async function saveHistory(
   projectRoot: string,
   acceptedFiles: string[],
+  skippedFiles: Array<{ path: string; reason: string }>,
   action: 'humanise' | 'slim' | 'stress-test',
 ): Promise<void> {
   const history = await loadHistory(projectRoot);
+  const bucket = history.actions[action];
 
-  const relativePaths = acceptedFiles.map(f => relative(projectRoot, f));
-  const merged = new Set([...history.actions[action], ...relativePaths]);
-  history.actions[action] = [...merged];
+  const acceptedRel = acceptedFiles.map(f => relative(projectRoot, f));
+  bucket.accepted = [...new Set([...bucket.accepted, ...acceptedRel])];
+
+  const skippedRel = skippedFiles.map(s => ({ path: relative(projectRoot, s.path), reason: s.reason }));
+  const skippedByPath = new Map(bucket.skipped.map(s => [s.path, s]));
+  for (const s of skippedRel) skippedByPath.set(s.path, s);
+  bucket.skipped = [...skippedByPath.values()];
+
   history.lastRunAt = new Date().toISOString();
 
   await writeFile(join(projectRoot, HISTORY_FILENAME), JSON.stringify(history, null, 2), 'utf8');
@@ -58,5 +80,6 @@ export async function getRefactoredPaths(
   action: 'humanise' | 'slim' | 'stress-test',
 ): Promise<Set<string>> {
   const history = await loadHistory(projectRoot);
-  return new Set(history.actions[action]);
+  const bucket = history.actions[action];
+  return new Set([...bucket.accepted, ...bucket.skipped.map(s => s.path)]);
 }

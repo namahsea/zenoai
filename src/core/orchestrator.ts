@@ -418,6 +418,15 @@ export async function runPhase2(
     process.exit(0);
   }
 
+  const { loadHistory } = await import('./history.js');
+  const runHistory = await loadHistory(process.cwd());
+  const skippedCount = runHistory.actions[action]?.skipped?.length ?? 0;
+
+  if (skippedCount > 0) {
+    console.log(chalk.dim(`ⓘ ${skippedCount} files previously flagged as too complex — skipped.`));
+    console.log(chalk.dim(`  To retry: remove them from .zeno-history.json`));
+  }
+
   // [COST_DISPLAY] — comment out this entire block when subscription model is active
   const estimatedCost = (plan.selectedFiles.length * 0.12).toFixed(2);
 

@@ -72,45 +72,40 @@ Return only the rewritten file source. No markdown fences. No explanation.`;
   }
 
   // Step 4 — score confidence locally. No Claude call.
-  // Scoring reflects only what can be measured in this iteration.
-  // testsPassed and lintClean deferred to next iteration when test runner is wired.
-  // Weights redistributed across measurable factors only.
+  let score = 0;
+  const penalties: string[] = [];
 
   const originalLines = rawSource.split('\n').length;
   const refactoredLines = refactoredSource.split('\n').length;
   const linesChanged = Math.abs(refactoredLines - originalLines);
   const changeRatio = linesChanged / originalLines;
 
-  let score = 0;
-
   // change size (0.50)
   if (changeRatio < 0.10) score += 0.50;
   else if (changeRatio < 0.25) score += 0.35;
-  else score += 0.15;
+  else penalties.push(`large diff (${(changeRatio * 100).toFixed(0)}% change)`);
 
   // no new imports (0.25)
   const originalImports = (rawSource.match(/^import /gm) ?? []).length;
   const refactoredImports = (refactoredSource.match(/^import /gm) ?? []).length;
   if (refactoredImports <= originalImports) score += 0.25;
+  else penalties.push('introduced new imports');
 
   // had existing tests (0.25)
   const testFilePath = filePath.replace(/\.(ts|tsx)$/, '.test.$1');
   const hasExistingTests = await fs.access(testFilePath).then(() => true).catch(() => false);
   if (hasExistingTests) score += 0.25;
+  else penalties.push('no existing tests');
 
-  // Threshold temporarily 0.55 — reflects scoring without test execution or lint.
-  // Restore to 0.70 when test runner is wired in next iteration.
+  // Threshold temporarily 0.55 — restore to 0.70 when test runner is wired in next iteration
   const CONFIDENCE_THRESHOLD = 0.55;
 
-  // Step 5 — gate check
-  let status: 'accepted' | 'skipped';
+  let status: 'accepted' | 'skipped' = 'accepted';
   let skipReason: string | undefined;
 
-  if (score >= CONFIDENCE_THRESHOLD) {
-    status = 'accepted';
-  } else {
+  if (score < CONFIDENCE_THRESHOLD) {
     status = 'skipped';
-    skipReason = `confidence score ${score.toFixed(2)} below threshold`;
+    skipReason = `confidence ${score.toFixed(2)} — ${penalties.join(', ')}`;
   }
 
   // Step 6 — return

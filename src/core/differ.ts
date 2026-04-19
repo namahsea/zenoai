@@ -99,10 +99,17 @@ export async function runDiffer(
     execSync(`git commit -m "chore: zeno humanise — ${acceptedPaths.length} files refactored"`);
   }
 
-  // Save accepted files to run history
-  if (acceptedPaths.length > 0) {
-    await saveHistory(process.cwd(), acceptedPaths, manifest.action as 'humanise' | 'slim' | 'stress-test');
-  }
+  // Save accepted and skipped files to run history
+  const skippedEntries = results
+    .filter(r => r.status === 'skipped')
+    .map(r => ({ path: r.filePath, reason: r.skipReason ?? 'confidence below threshold' }));
+
+  await saveHistory(
+    process.cwd(),
+    acceptedPaths,
+    skippedEntries,
+    manifest.action as 'humanise' | 'slim' | 'stress-test',
+  );
 
   // Step 2 — print report
   console.log('\n' + chalk.cyan('━━━  ZENOAI REFACTOR REPORT  ━━━'));
