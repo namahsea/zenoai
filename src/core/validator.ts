@@ -24,6 +24,17 @@ export async function runValidator(
     return { filePath, status: 'skipped', confidenceScore: 0, skipReason: 'file unreadable' };
   }
 
+  const lineCount = rawSource.split('\n').length;
+  if (lineCount > 300) {
+    return {
+      filePath,
+      status: 'skipped' as const,
+      confidenceScore: 0,
+      skipReason: `file too large for autonomous refactoring (${lineCount} lines) — split into smaller modules first`,
+      linesChanged: 0,
+    };
+  }
+
   const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
   // TODO: wire test generation and execution in next iteration
