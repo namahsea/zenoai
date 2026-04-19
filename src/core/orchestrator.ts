@@ -9,7 +9,7 @@ import { access, readFile, writeFile } from 'node:fs/promises';
 import { join, basename } from 'node:path';
 import { analyse } from './analyst.js';
 import { saveReport } from './cache.js';
-import { runPreflight } from './preflight.js';
+import { runPreflight, rollback } from './preflight.js';
 import { runPlanner } from './planner.js';
 import { runReviewer } from './reviewer.js';
 import { runValidator } from './validator.js';
@@ -418,12 +418,23 @@ export async function runPhase2(
     process.exit(0);
   }
 
-  // [COST_DISPLAY] — remove or comment this block when subscription model is active
+  // [COST_DISPLAY] — comment out this entire block when subscription model is active
   const estimatedCost = (plan.selectedFiles.length * 0.12).toFixed(2);
+
+  console.log(chalk.cyan('\nFiles selected for refactoring:'));
+  plan.selectedFiles.forEach((f, i) => {
+    console.log(chalk.white(`  ${i + 1}. ${f}`));
+  });
+
+  console.log('');
   console.log(chalk.yellow(`Estimated API cost: ~$${estimatedCost} (${plan.selectedFiles.length} files × 2 calls)`));
+
   const proceedWithCost = await confirm({ message: 'Proceed with this run?', default: true });
+
   if (!proceedWithCost) {
-    console.log(chalk.yellow('Run cancelled.'));
+    console.log(chalk.yellow('\nRun cancelled. Cleaning up...'));
+    await rollback(preflight.manifestPath);
+    console.log(chalk.yellow('Branch removed. Your repo is unchanged.'));
     process.exit(0);
   }
   // [/COST_DISPLAY]
