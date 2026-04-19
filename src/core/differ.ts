@@ -1,4 +1,5 @@
-import { writeFile, readFile, unlink } from 'node:fs/promises'; // readFile imported but currently unused — remove if no planned use
+import { writeFile, readFile, unlink } from 'node:fs/promises';
+import { saveHistory } from './history.js';
 import { execSync } from 'node:child_process';
 import chalk from 'chalk';
 import { confirm } from '@inquirer/prompts';
@@ -96,6 +97,11 @@ export async function runDiffer(
   if (acceptedPaths.length > 0) {
     execSync(`git add ${acceptedPaths.map(p => `"${p}"`).join(' ')}`);
     execSync(`git commit -m "chore: zeno humanise — ${acceptedPaths.length} files refactored"`);
+  }
+
+  // Save accepted files to run history
+  if (acceptedPaths.length > 0) {
+    await saveHistory(process.cwd(), acceptedPaths, manifest.action as 'humanise' | 'slim' | 'stress-test');
   }
 
   // Step 2 — print report

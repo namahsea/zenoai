@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { DependencyGraph, FileReport } from './analyst.js';
+import { getRefactoredPaths } from './history.js';
 
 export interface PlannerResult {
   selectedFiles: string[];
@@ -82,16 +83,31 @@ export async function runPlanner(
 
   // Cap candidates before cycle detection — the LLM context window constrains how many summaries can be sent at once
   const candidateFiles = pathsPassingLocalFilter.slice(0, MAX_PLANNER_CANDIDATES);
-  const candidateFileSet = new Set(candidateFiles);
+
+  // Exclude files already refactored for this action in a previous run
+  const alreadyRefactored = await getRefactoredPaths(process.cwd(), action);
+  const freshCandidates = candidateFiles.filter(f => !alreadyRefactored.has(f));
+
+  if (freshCandidates.length === 0) {
+    return {
+      selectedFiles: [],
+      skippedFiles: [{
+        path: 'all candidates',
+        reason: 'local filter: all eligible files have already been refactored for this action. Run a different action or reset history.',
+      }],
+    };
+  }
+
+  const candidateFileSet = new Set(freshCandidates);
 
   // Step 2 — direct circular dependency detection
   // Note: this only detects direct A<->B cycles, not transitive cycles (A->B->C->A).
   // Transitive cycle detection (Tarjan's algorithm) is deferred — direct cycles cover ~90% of real cases.
-  const cycleSkipped = findDirectCyclePaths(candidateFiles, graph.importedBy);
+  const cycleSkipped = findDirectCyclePaths(freshCandidates, graph.importedBy);
   for (const path of cycleSkipped) {
     skippedFiles.push({ path, reason: 'local filter: circular dependency' });
   }
-  const cycleFreePaths = candidateFiles.filter(p => !cycleSkipped.has(p));
+  const cycleFreePaths = freshCandidates.filter(p => !cycleSkipped.has(p));
 
   // Step 3 — build compact per-file summary (importedBy filtered to batch only)
   const compactFileSummaries = cycleFreePaths.map(path =>
