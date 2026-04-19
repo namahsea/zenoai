@@ -94,6 +94,19 @@ export async function runPreflight(): Promise<PreflightResult> {
     await initialiseGitRepo(cwd);
   }
 
+  // Guard against recursive branching — Zeno must never branch off itself
+  const currentBranchCmd = await runCommand('git branch --show-current');
+  const currentBranch = currentBranchCmd.stdout.trim();
+
+  if (currentBranch.startsWith('zeno/')) {
+    errors.push(
+      `You are on a Zeno branch (${currentBranch}). Merge or discard it first:\n` +
+      `  Keep changes:    git checkout main && git merge ${currentBranch}\n` +
+      `  Discard changes: git checkout main && git branch -D ${currentBranch}`,
+    );
+    return { passed: false, branch, manifestPath, errors, warnings };
+  }
+
   // 2. Dirty tree check — hard block
   const statusCmd = await runCommand('git status --porcelain');
   if (statusCmd.stdout.trim().length > 0) {

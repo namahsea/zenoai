@@ -50,7 +50,7 @@ Return only the rewritten file source. No markdown fences. No explanation.`;
 
   const refactorResponse = await client.messages.create({
     model: 'claude-sonnet-4-6',
-    max_tokens: 4000,
+    max_tokens: 8000,
     system: refactorSystemPrompt,
     messages: [{ role: 'user', content: rawSource }],
   });
@@ -69,6 +69,19 @@ Return only the rewritten file source. No markdown fences. No explanation.`;
   if (fenceStart !== -1 && fenceEnd !== fenceStart) {
     const afterOpenFence = refactoredSource.indexOf('\n', fenceStart) + 1;
     refactoredSource = refactoredSource.substring(afterOpenFence, fenceEnd).trim();
+  }
+
+  // Truncation guard — if brace count is significantly unbalanced the refactor was cut off
+  const openBraces = (refactoredSource.match(/{/g) ?? []).length;
+  const closeBraces = (refactoredSource.match(/}/g) ?? []).length;
+  if (Math.abs(openBraces - closeBraces) > 5) {
+    return {
+      filePath,
+      status: 'skipped' as const,
+      confidenceScore: 0,
+      skipReason: 'refactored source appears truncated — brace mismatch detected',
+      linesChanged: 0,
+    };
   }
 
   // Step 4 — score confidence locally. No Claude call.
