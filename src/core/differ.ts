@@ -88,6 +88,13 @@ export async function runDiffer(
     }
   }
 
+  const acceptedCount = results.filter(r => r.status === 'accepted').length;
+  if (acceptedCount === 0) {
+    console.log(chalk.yellow('No files were accepted this run. Nothing to apply.'));
+    await rollback(manifestPath);
+    return { approved: false, merged: false, appliedFiles: [], skippedFiles: results.map(r => r.filePath) };
+  }
+
   await writeFile(manifestPath, JSON.stringify(manifest, null, 2), FILE_ENCODING);
 
   const acceptedPaths = results

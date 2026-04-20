@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { readFile } from 'node:fs/promises';
+import { extractJson } from '../utils/llm.js';
 
 export interface ReviewerResult {
   filePath: string;
@@ -13,12 +14,6 @@ const MAX_REVIEWER_TOKENS = 2000;
 
 const anthropicClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-function extractJsonObject(text: string): string | null {
-  const jsonStart = text.indexOf('{');
-  const jsonEnd = text.lastIndexOf('}');
-  if (jsonStart === -1 || jsonEnd === -1) return null;
-  return text.substring(jsonStart, jsonEnd + 1);
-}
 
 export async function runReviewer(
   filePath: string,
@@ -83,11 +78,10 @@ Format:
 
   // Step 4 — boundary extraction
   const responseText = firstContentBlock.text;
-  const jsonString = extractJsonObject(responseText);
 
   let reviewerPayload: { changes?: string[]; skip?: boolean; skipReason?: string | null };
   try {
-    reviewerPayload = JSON.parse(jsonString ?? '');
+    reviewerPayload = JSON.parse(extractJson(responseText));
   } catch {
     return { filePath, changes: [], skip: true, skipReason: 'reviewer response unparseable' };
   }

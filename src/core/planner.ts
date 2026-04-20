@@ -1,6 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import type { DependencyGraph, FileReport } from './analyst.js';
 import { getRefactoredPaths } from './history.js';
+import { extractJson } from '../utils/llm.js';
 
 export interface PlannerResult {
   selectedFiles: string[];
@@ -44,15 +45,6 @@ function buildCompactFileSummary(
   };
 }
 
-function extractJsonFromText(text: string): { selected: string[]; skipped: Array<{ path: string; reason: string }> } {
-  const jsonStartIndex = text.indexOf('{');
-  const jsonEndIndex = text.lastIndexOf('}');
-  if (jsonStartIndex === -1 || jsonEndIndex === -1) throw new Error('No JSON object found in planner response');
-  return JSON.parse(text.substring(jsonStartIndex, jsonEndIndex + 1)) as {
-    selected: string[];
-    skipped: Array<{ path: string; reason: string }>;
-  };
-}
 
 export async function runPlanner(
   graph: DependencyGraph,
@@ -154,7 +146,10 @@ Format:
 
   // Step 5 — parse planner selection from LLM response
   const rawResponseText = firstContentBlock.text;
-  const plannerSelection = extractJsonFromText(rawResponseText);
+  const plannerSelection = JSON.parse(extractJson(rawResponseText)) as {
+    selected: string[];
+    skipped: Array<{ path: string; reason: string }>;
+  };
 
   // Step 6 — combine results
   for (const skippedEntry of plannerSelection.skipped ?? []) {

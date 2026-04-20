@@ -456,6 +456,12 @@ export async function runPhase2(
 
     if (reviewed.skip) {
       spinner.warn(`Skipped ${basename(filePath)}: ${reviewed.skipReason}`);
+      results.push({
+        filePath,
+        status: 'skipped' as const,
+        confidenceScore: 0,
+        skipReason: reviewed.skipReason ?? 'reviewer skipped this file',
+      });
       continue;
     }
 
