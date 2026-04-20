@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
-import { confirm } from '@inquirer/prompts';
+import { confirm, select } from '@inquirer/prompts';
 import chalk from 'chalk';
 
 const execAsync = promisify(exec);
@@ -109,21 +109,51 @@ export async function runPreflight(): Promise<PreflightResult> {
         returnBranch = existingManifest.originalBranch;
       }
     } catch {
-      // manifest doesn't exist yet — fall back to 'main'
+      // manifest doesn't exist — fall back to main
     }
-    errors.push(
-      `You are on a Zeno branch (${currentBranch}). Merge or discard it first:\n` +
-      `  Keep changes:    git checkout ${returnBranch} && git merge ${currentBranch}\n` +
-      `  Discard changes: git checkout ${returnBranch} && git branch -D ${currentBranch}`
-    );
-    return { passed: false, branch, manifestPath, errors, warnings };
+
+    console.log(chalk.yellow(`You are on a Zeno branch: ${currentBranch}`));
+    const branchAction = await select({
+      message: 'What do you want to do?',
+      choices: [
+        { name: `Keep changes — merge into ${returnBranch}`, value: 'keep' },
+        { name: 'Discard changes — delete the branch', value: 'discard' },
+        { name: 'Exit — I will handle it manually', value: 'exit' },
+      ],
+    });
+
+    if (branchAction === 'keep') {
+      await runCommand(`git checkout ${returnBranch}`);
+      await runCommand(`git merge ${currentBranch}`);
+      await runCommand(`git branch -D ${currentBranch}`);
+      console.log(chalk.green(`✓ Merged into ${returnBranch}`));
+    } else if (branchAction === 'discard') {
+      await runCommand('git reset --hard HEAD');
+      await runCommand(`git checkout ${returnBranch}`);
+      await runCommand(`git branch -D ${currentBranch}`);
+      console.log(chalk.green('✓ Branch discarded. Working tree clean.'));
+    } else {
+      return { passed: false, branch, manifestPath, errors, warnings };
+    }
   }
 
-  // 2. Dirty tree check — hard block
+  // 2. Dirty tree check — interactive
   const statusCmd = await runCommand('git status --porcelain');
   if (statusCmd.stdout.trim().length > 0) {
-    errors.push('You have uncommitted changes. Please run: git add . && git commit -m "your message" — then try Zeno again.');
-    return { passed: false, branch, manifestPath, errors, warnings };
+    console.log(chalk.yellow('You have uncommitted changes.'));
+    const commitAction = await confirm({
+      message: 'Commit them now so Zeno can run safely?',
+      default: true,
+    });
+
+    if (commitAction) {
+      await runCommand('git add .');
+      await runCommand('git commit -m "chore: pre-zeno snapshot"');
+      console.log(chalk.green('✓ Changes committed'));
+    } else {
+      console.log(chalk.yellow('Commit your changes manually and run Zeno again.'));
+      return { passed: false, branch, manifestPath, errors, warnings };
+    }
   }
 
   // 3. Branch creation
