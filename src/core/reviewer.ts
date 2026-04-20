@@ -1,6 +1,5 @@
-import Anthropic from '@anthropic-ai/sdk';
 import { readFile } from 'node:fs/promises';
-import { extractJson } from '../utils/llm.js';
+import { generateCompletion, extractJson } from '../utils/llm.js';
 
 export interface ReviewerResult {
   filePath: string;
@@ -9,10 +8,7 @@ export interface ReviewerResult {
   skipReason?: string;
 }
 
-const REVIEWER_MODEL = 'claude-sonnet-4-6';
 const MAX_REVIEWER_TOKENS = 2000;
-
-const anthropicClient = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
 
 export async function runReviewer(
@@ -63,21 +59,10 @@ Format:
   "skipReason": string | null
 }`;
 
-  const response = await anthropicClient.messages.create({
-    model: REVIEWER_MODEL,
-    max_tokens: MAX_REVIEWER_TOKENS,
-    system: systemPrompt,
-    messages: [{ role: 'user', content: fileSource }],
-  });
-
-  // Step 3 — extract text block
-  const firstContentBlock = response.content[0];
-  if (firstContentBlock.type !== 'text') {
-    return { filePath, changes: [], skip: true, skipReason: 'reviewer response unparseable' };
-  }
+  // Step 3 — LLM call
+  const responseText = await generateCompletion(systemPrompt, fileSource, MAX_REVIEWER_TOKENS);
 
   // Step 4 — boundary extraction
-  const responseText = firstContentBlock.text;
 
   let reviewerPayload: { changes?: string[]; skip?: boolean; skipReason?: string | null };
   try {

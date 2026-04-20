@@ -50,6 +50,14 @@ const KEY_HINTS: Record<Provider, string> = {
   openai: 'platform.openai.com/api-keys',
 };
 
+export async function getAiConfig(): Promise<{ provider: string; apiKey: string }> {
+  const config = await readConfig();
+  if (!config?.apiKey) {
+    throw new Error('No API key found. Run npx zenoai to complete setup.');
+  }
+  return { provider: config.provider, apiKey: config.apiKey };
+}
+
 export async function getApiKey(): Promise<string> {
   try {
     const raw = await readFile(CONFIG_PATH, 'utf8');

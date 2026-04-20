@@ -1,5 +1,5 @@
-import Anthropic from '@anthropic-ai/sdk';
 import * as fs from 'node:fs/promises';
+import { generateCompletion } from '../utils/llm.js';
 
 export interface ValidatorResult {
   filePath: string;
@@ -35,12 +35,10 @@ export async function runValidator(
     };
   }
 
-  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-
   // TODO: wire test generation and execution in next iteration
   const testable = false;
 
-  // Step 3 — apply refactor via Claude
+  // Step 3 — apply refactor via LLM
   const refactorSystemPrompt = `You are a senior TypeScript engineer rewriting a file for clarity and maintainability.
 You write code the way a careful human would — not the way an AI would clean it up.
 
@@ -59,19 +57,7 @@ Rules:
 
 Return only the rewritten file source. No markdown fences. No explanation.`;
 
-  const refactorResponse = await client.messages.create({
-    model: 'claude-sonnet-4-6',
-    max_tokens: 8000,
-    system: refactorSystemPrompt,
-    messages: [{ role: 'user', content: rawSource }],
-  });
-
-  const refactorBlock = refactorResponse.content[0];
-  if (refactorBlock.type !== 'text') {
-    return { filePath, status: 'skipped', confidenceScore: 0, skipReason: 'refactor response empty' };
-  }
-
-  const rawRefactorResponse = refactorBlock.text;
+  const rawRefactorResponse = await generateCompletion(refactorSystemPrompt, rawSource, 8000);
 
   let refactoredSource = rawRefactorResponse.trim();
   const fenceStart = refactoredSource.indexOf('```');

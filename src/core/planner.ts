@@ -1,7 +1,6 @@
-import Anthropic from '@anthropic-ai/sdk';
 import type { DependencyGraph, FileReport } from './analyst.js';
 import { getRefactoredPaths } from './history.js';
-import { extractJson } from '../utils/llm.js';
+import { generateCompletion, extractJson } from '../utils/llm.js';
 
 export interface PlannerResult {
   selectedFiles: string[];
@@ -133,19 +132,8 @@ Format:
   "skipped": [{ "path": string, "reason": string }]
 }`;
 
-  const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-  const response = await client.messages.create({
-    model: 'claude-sonnet-4-6',
-    max_tokens: PLANNER_MAX_TOKENS,
-    system: systemPrompt,
-    messages: [{ role: 'user', content: JSON.stringify(compactFileSummaries, null, 2) }],
-  });
-
-  const firstContentBlock = response.content[0];
-  if (firstContentBlock.type !== 'text') throw new Error('Unexpected response type from planner');
-
   // Step 5 — parse planner selection from LLM response
-  const rawResponseText = firstContentBlock.text;
+  const rawResponseText = await generateCompletion(systemPrompt, JSON.stringify(compactFileSummaries, null, 2), PLANNER_MAX_TOKENS);
   const plannerSelection = JSON.parse(extractJson(rawResponseText)) as {
     selected: string[];
     skipped: Array<{ path: string; reason: string }>;
