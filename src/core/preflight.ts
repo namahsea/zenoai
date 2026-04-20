@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import { confirm } from '@inquirer/prompts';
+import chalk from 'chalk';
 
 const execAsync = promisify(exec);
 
@@ -99,10 +100,21 @@ export async function runPreflight(): Promise<PreflightResult> {
   const currentBranch = currentBranchCmd.stdout.trim();
 
   if (currentBranch.startsWith('zeno/')) {
+    let returnBranch = 'main';
+    try {
+      const existingManifest = JSON.parse(
+        await readFile(join(cwd, '.zeno-manifest.json'), 'utf-8')
+      );
+      if (existingManifest.originalBranch) {
+        returnBranch = existingManifest.originalBranch;
+      }
+    } catch {
+      // manifest doesn't exist yet — fall back to 'main'
+    }
     errors.push(
       `You are on a Zeno branch (${currentBranch}). Merge or discard it first:\n` +
-      `  Keep changes:    git checkout main && git merge ${currentBranch}\n` +
-      `  Discard changes: git checkout main && git branch -D ${currentBranch}`,
+      `  Keep changes:    git checkout ${returnBranch} && git merge ${currentBranch}\n` +
+      `  Discard changes: git checkout ${returnBranch} && git branch -D ${currentBranch}`
     );
     return { passed: false, branch, manifestPath, errors, warnings };
   }
@@ -178,7 +190,18 @@ export async function rollback(manifestPath: string): Promise<void> {
     await runCommand(`git checkout ${manifest.originalBranch}`);
 
     // Step 3 — delete the zeno branch
-    await runCommand(`git branch -D ${manifest.branch}`);
+    try {
+      await runCommand(`git branch -D ${manifest.branch}`);
+    } catch (err: any) {
+      if (err.message?.includes('used by worktree')) {
+        console.log(chalk.yellow(`\n⚠ Branch ${manifest.branch} is locked by another git worktree.`));
+        console.log(chalk.yellow(`Close the other worktree/terminal and delete manually:`));
+        console.log(`  git worktree remove <path>`);
+        console.log(`  git branch -D ${manifest.branch}`);
+      } else {
+        console.log(chalk.dim(`Note: could not auto-delete branch ${manifest.branch}.`));
+      }
+    }
 
     // Step 4 — delete the manifest
     await rm(manifestPath, { force: true });
