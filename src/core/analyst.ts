@@ -147,26 +147,52 @@ export async function buildDependencyGraph(files: FileMetadata[], projectRoot: s
   return { order, importerCount, importedBy };
 }
 
+async function getSubmodulePaths(projectRoot: string): Promise<Set<string>> {
+  try {
+    const gitmodulesPath = join(projectRoot, '.gitmodules');
+    const content = await readFile(gitmodulesPath, 'utf-8');
+    const paths = new Set<string>();
+    for (const line of content.split('\n')) {
+      const match = line.match(/^\s*path\s*=\s*(.+)$/);
+      if (match) paths.add(match[1].trim());
+    }
+    return paths;
+  } catch {
+    return new Set();
+  }
+}
+
 export async function analyse(projectRoot: string): Promise<AnalyseResult> {
   // First pass: collect all paths so we can resolve test-file presence
   const { paths, skipped } = collectAllFiles(projectRoot);
   const allPaths = new Set<string>(paths);
+  const submodulePaths = await getSubmodulePaths(projectRoot);
 
   const reports: FileReport[] = [];
 
   for (const filePath of allPaths) {
+    const relPath = relative(projectRoot, filePath);
+
+    const isInsideSubmodule = [...submodulePaths].some(sub =>
+      relPath.startsWith(sub + '/') || relPath.startsWith(sub + sep)
+    );
+    if (isInsideSubmodule) {
+      skipped.push({ path: relPath, reason: 'inside git submodule' });
+      continue;
+    }
+
     let content: string;
     try {
       content = await readFile(filePath, 'utf8');
     } catch {
-      skipped.push({ path: relative(projectRoot, filePath), reason: 'unreadable' });
+      skipped.push({ path: relPath, reason: 'unreadable' });
       continue;
     }
 
     const lines = content.split('\n').length;
 
     reports.push({
-      path: relative(projectRoot, filePath),
+      path: relPath,
       lines,
       functions: countMatches(content, FN_DECL_RE) + countMatches(content, ARROW_RE),
       imports: countMatches(content, /^import\s/gm),

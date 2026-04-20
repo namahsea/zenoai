@@ -91,6 +91,25 @@ export async function runDiffer(
   const acceptedCount = results.filter(r => r.status === 'accepted').length;
   if (acceptedCount === 0) {
     console.log(chalk.yellow('No files were accepted this run. Nothing to apply.'));
+
+    // TODO: architectural debt — history management belongs in orchestrator.ts
+    // Deferred to avoid scope creep. Move both saveHistory calls (here and in
+    // the normal acceptance flow below) to orchestrator.ts in a future cleanup pass.
+
+    // Save skipped files to history so they aren't re-selected next run
+    const skippedEntries = results
+      .filter(r => r.status === 'skipped')
+      .map(r => ({ path: r.filePath, reason: r.skipReason ?? 'skipped' }));
+
+    if (skippedEntries.length > 0) {
+      await saveHistory(
+        process.cwd(),
+        [],
+        skippedEntries,
+        manifest.action as 'humanise' | 'slim' | 'stress-test',
+      );
+    }
+
     await rollback(manifestPath);
     return { approved: false, merged: false, appliedFiles: [], skippedFiles: results.map(r => r.filePath) };
   }

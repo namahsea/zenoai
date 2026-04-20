@@ -23,6 +23,16 @@ export async function runReviewer(
     return { filePath, changes: [], skip: true, skipReason: 'file unreadable' };
   }
 
+  const lineCount = fileSource.split('\n').length;
+  if (lineCount > 300) {
+    return {
+      filePath,
+      changes: [],
+      skip: true,
+      skipReason: `file too large for autonomous refactoring (${lineCount} lines) — split into smaller modules first`,
+    };
+  }
+
   // Step 2 — Claude call
   const systemPrompt = `You are a senior TypeScript engineer reviewing a file before a cleanup run.
 Your job is to produce a precise, conservative change plan for the following action: ${action}
