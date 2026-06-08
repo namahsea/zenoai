@@ -14,6 +14,7 @@ import { runPlanner } from './planner.js';
 import { runReviewer } from './reviewer.js';
 import { runValidator } from './validator.js';
 import type { ValidatorResult } from './validator.js';
+import { runCritic } from './critic.js';
 import { confirm } from '@inquirer/prompts';
 import { runDiffer } from './differ.js';
 import type { ZenoConfig } from '../config.js';
@@ -428,7 +429,7 @@ export async function runPhase2(
   }
 
   // [COST_DISPLAY] — comment out this entire block when subscription model is active
-  const estimatedCost = (plan.selectedFiles.length * 0.12).toFixed(2);
+  const estimatedCost = (plan.selectedFiles.length * 0.18).toFixed(2);
 
   console.log(chalk.cyan('\nFiles selected for refactoring:'));
   plan.selectedFiles.forEach((f, i) => {
@@ -436,7 +437,7 @@ export async function runPhase2(
   });
 
   console.log('');
-  console.log(chalk.yellow(`Estimated API cost: ~$${estimatedCost} (${plan.selectedFiles.length} files × 2 calls)`));
+  console.log(chalk.yellow(`Estimated API cost: ~$${estimatedCost} (${plan.selectedFiles.length} files × 3 calls)`));
 
   const proceedWithCost = await confirm({ message: 'Proceed with this run?', default: true });
 
@@ -448,7 +449,7 @@ export async function runPhase2(
   }
   // [/COST_DISPLAY]
 
-  // Step 4 — reviewer + validator loop
+  // Step 4 — reviewer + validator + critic loop
   const results: ValidatorResult[] = [];
   for (const filePath of plan.selectedFiles) {
     spinner.start(`Reviewing ${basename(filePath)}...`);
@@ -467,8 +468,20 @@ export async function runPhase2(
 
     spinner.start(`Validating ${basename(filePath)}...`);
     const validated = await runValidator(filePath, reviewed.changes, action);
-    spinner.succeed(`${basename(filePath)} — score ${validated.confidenceScore}`);
-    results.push(validated);
+    if (validated.status === 'skipped') {
+      spinner.warn(`Skipped ${basename(filePath)}: ${validated.skipReason}`);
+      results.push(validated);
+      continue;
+    }
+
+    spinner.start(`Critiquing ${basename(filePath)} boundaries...`);
+    const critiqued = await runCritic(validated, reviewed.changes, action);
+    if (critiqued.status === 'skipped') {
+      spinner.warn(`Skipped ${basename(filePath)}: ${critiqued.skipReason}`);
+    } else {
+      spinner.succeed(`${basename(filePath)} — score ${critiqued.confidenceScore}`);
+    }
+    results.push(critiqued);
   }
 
   // Step 5 — differ
