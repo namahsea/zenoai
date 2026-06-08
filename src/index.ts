@@ -195,7 +195,7 @@ async function main() {
 
   console.log('');
 
-  if (action === 'Eyeball it') {
+  if (action === 'Eyeball it' || action === 'How bad is it' || action === 'Triage it') {
     await runOrchestrator({ role, action, config });
   } else if (action === 'Humanise it') {
     await runPhase2(process.cwd(), 'humanise', role);
@@ -203,9 +203,6 @@ async function main() {
     await runPhase2(process.cwd(), 'slim', role);
   } else if (action === 'Stress test it') {
     await runPhase2(process.cwd(), 'stress-test', role);
-  } else if (action === 'How bad is it' || action === 'Triage it') {
-    // TODO: implement EM-specific actions in next iteration
-    await runPhase2(process.cwd(), 'humanise', role);
   }
 }
 

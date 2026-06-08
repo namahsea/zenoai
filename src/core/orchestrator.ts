@@ -150,10 +150,22 @@ function scoreChalk(label: HealthLabel): (text: string) => string {
   }
 }
 
-export async function runOrchestrator(opts: RunOptions): Promise<void> {
-  console.log(chalk.dim(`role: ${opts.role}  |  action: ${opts.action}\n`));
+function actionSlug(action: string): string {
+  return action.toLowerCase().replace(/\s+/g, '-');
+}
 
-  if (opts.role === 'Senior Developer' && opts.action === 'Eyeball it') {
+function isReadOnlyReportAction(role: string, action: string): boolean {
+  return (
+    (role === 'Senior Developer' && action === 'Eyeball it') ||
+    (role === 'EM' && (action === 'How bad is it' || action === 'Triage it'))
+  );
+}
+
+export async function runOrchestrator(opts: RunOptions): Promise<void> {
+  const normalizedAction = actionSlug(opts.action);
+  console.log(chalk.dim(`role: ${opts.role}  |  action: ${normalizedAction}\n`));
+
+  if (isReadOnlyReportAction(opts.role, opts.action)) {
     const root = process.cwd();
 
     const MAX_SEND = 50;
@@ -294,7 +306,7 @@ export async function runOrchestrator(opts: RunOptions): Promise<void> {
       process.exit(1);
     }
 
-    printReport(report, root, files.length);
+    printReport(report, root, files.length, normalizedAction);
     await saveReport(report, root, files.length);
 
     process.exit(0);
@@ -305,7 +317,7 @@ export async function runOrchestrator(opts: RunOptions): Promise<void> {
   process.exit(0);
 }
 
-function printReport(report: HealthReport, root: string, fileCount: number): void {
+function printReport(report: HealthReport, root: string, fileCount: number, action: string): void {
   const now = new Date();
   const date = now.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
   const time = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
@@ -316,6 +328,7 @@ function printReport(report: HealthReport, root: string, fileCount: number): voi
   console.log(chalk.bold.white('━━━  ZENOAI — CODEBASE HEALTH REPORT  ━━━'));
   console.log(chalk.dim(`Directory : ${root}`));
   console.log(chalk.dim(`Files     : ${fileCount}`));
+  console.log(chalk.dim(`Action    : ${action}`));
   console.log(chalk.dim(`Date      : ${datetime}\n`));
 
   // ── Health Score ─────────────────────────────────────────────────────────────
