@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises';
 import { generateCompletion, extractJson } from '../utils/llm.js';
 import type { ValidatorResult } from './validator.js';
+import { scoreRefactor } from './refactorScoring.js';
 
 interface CriticPayload {
   status?: 'accepted' | 'skipped';
@@ -29,19 +30,6 @@ function hasLikelyTruncation(source: string): boolean {
   const openBraces = (source.match(/{/g) ?? []).length;
   const closeBraces = (source.match(/}/g) ?? []).length;
   return Math.abs(openBraces - closeBraces) > 5;
-}
-
-function countChangedLines(before: string, after: string): number {
-  const beforeLines = before.split('\n');
-  const afterLines = after.split('\n');
-  const max = Math.max(beforeLines.length, afterLines.length);
-  let changed = 0;
-
-  for (let i = 0; i < max; i++) {
-    if (beforeLines[i] !== afterLines[i]) changed += 1;
-  }
-
-  return changed;
 }
 
 export async function runCritic(
@@ -150,9 +138,22 @@ REFACTORED`;
     };
   }
 
+  const scored = await scoreRefactor(validated.filePath, originalSource, correctedSource);
+  if (scored.skipReason) {
+    return {
+      ...validated,
+      status: 'skipped',
+      confidenceScore: scored.confidenceScore,
+      refactoredSource: undefined,
+      skipReason: `critic rejected final diff — ${scored.skipReason}`,
+      linesChanged: scored.linesChanged,
+    };
+  }
+
   return {
     ...validated,
+    confidenceScore: scored.confidenceScore,
     refactoredSource: correctedSource,
-    linesChanged: countChangedLines(originalSource, correctedSource),
+    linesChanged: scored.linesChanged,
   };
 }

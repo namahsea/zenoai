@@ -2,6 +2,7 @@ import * as fs from 'node:fs/promises';
 import { generateCompletion } from '../utils/llm.js';
 import type { LargeFileAdvisory } from './largeFileAdvisor.js';
 import { MAX_AUTONOMOUS_REFACTOR_LINES } from './refactorLimits.js';
+import { scoreRefactor } from './refactorScoring.js';
 
 export interface ValidatorResult {
   filePath: string;
@@ -85,50 +86,17 @@ Return only the rewritten file source. No markdown fences. No explanation.`;
   }
 
   // Step 4 — score confidence locally. No Claude call.
-  let score = 0;
-  const penalties: string[] = [];
-
-  const originalLines = rawSource.split('\n').length;
-  const refactoredLines = refactoredSource.split('\n').length;
-  const linesChanged = Math.abs(refactoredLines - originalLines);
-  const changeRatio = linesChanged / originalLines;
-
-  // change size (0.50)
-  if (changeRatio < 0.10) score += 0.50;
-  else if (changeRatio < 0.25) score += 0.35;
-  else penalties.push(`large diff (${(changeRatio * 100).toFixed(0)}% change)`);
-
-  // no new imports (0.25)
-  const originalImports = (rawSource.match(/^import /gm) ?? []).length;
-  const refactoredImports = (refactoredSource.match(/^import /gm) ?? []).length;
-  if (refactoredImports <= originalImports) score += 0.25;
-  else penalties.push('introduced new imports');
-
-  // had existing tests (0.25)
-  const testFilePath = filePath.replace(/\.(ts|tsx)$/, '.test.$1');
-  const hasExistingTests = await fs.access(testFilePath).then(() => true).catch(() => false);
-  if (hasExistingTests) score += 0.25;
-  else penalties.push('no existing tests');
-
-  // Threshold temporarily 0.55 — restore to 0.70 when test runner is wired in next iteration
-  const CONFIDENCE_THRESHOLD = 0.55;
-
-  let status: 'accepted' | 'skipped' = 'accepted';
-  let skipReason: string | undefined;
-
-  if (score < CONFIDENCE_THRESHOLD) {
-    status = 'skipped';
-    skipReason = `confidence ${score.toFixed(2)} — ${penalties.join(', ')}`;
-  }
+  const scored = await scoreRefactor(filePath, rawSource, refactoredSource);
+  const status: 'accepted' | 'skipped' = scored.skipReason ? 'skipped' : 'accepted';
 
   // Step 6 — return
   return {
     filePath,
     status,
-    confidenceScore: parseFloat(score.toFixed(2)),
+    confidenceScore: scored.confidenceScore,
     refactoredSource: status === 'accepted' ? refactoredSource : undefined,
     testFile: testable ? `${filePath}.zeno-test.ts` : undefined,
-    skipReason: status === 'skipped' ? skipReason : undefined,
-    linesChanged,
+    skipReason: scored.skipReason,
+    linesChanged: scored.linesChanged,
   };
 }
