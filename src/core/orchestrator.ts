@@ -15,10 +15,12 @@ import { runReviewer } from './reviewer.js';
 import { runValidator } from './validator.js';
 import type { ValidatorResult } from './validator.js';
 import { runCritic } from './critic.js';
+import { runLargeFileAdvisor } from './largeFileAdvisor.js';
 import { confirm } from '@inquirer/prompts';
 import { runDiffer } from './differ.js';
 import type { ZenoConfig } from '../config.js';
 import type { HealthReport, RiskLevel, HealthLabel } from '../types.js';
+import { MAX_AUTONOMOUS_REFACTOR_LINES } from './refactorLimits.js';
 
 export interface RunOptions {
   role: string;
@@ -420,6 +422,7 @@ export async function runPhase2(
   // Step 2 — analyst
   const spinner = ora('Analysing codebase...').start();
   const { reports, graph } = await analyse(projectPath);
+  const reportByPath = new Map(reports.map(report => [report.path, report]));
   spinner.succeed(`Found ${reports.length} files`);
 
   // Step 3 — planner
@@ -469,13 +472,23 @@ export async function runPhase2(
     const reviewed = await runReviewer(filePath, action);
 
     if (reviewed.skip) {
-      spinner.warn(`Skipped ${basename(filePath)}: ${reviewed.skipReason}`);
-      results.push({
+      const fileReport = reportByPath.get(filePath);
+      const skippedResult: ValidatorResult = {
         filePath,
         status: 'skipped' as const,
         confidenceScore: 0,
         skipReason: reviewed.skipReason ?? 'reviewer skipped this file',
-      });
+      };
+
+      if ((fileReport?.lines ?? 0) > MAX_AUTONOMOUS_REFACTOR_LINES) {
+        spinner.start(`Preparing split advisory for ${basename(filePath)}...`);
+        const advisory = await runLargeFileAdvisor(filePath, action, fileReport);
+        skippedResult.skipReason = advisory.reason;
+        skippedResult.largeFileAdvisory = advisory;
+      }
+
+      spinner.warn(`Skipped ${basename(filePath)}: ${skippedResult.skipReason}`);
+      results.push(skippedResult);
       continue;
     }
 

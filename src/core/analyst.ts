@@ -10,6 +10,10 @@ export interface FileReport {
   exports: number;
   consoleLogs: number;
   hasTest: boolean;
+  hasReactSignals: boolean;
+  hasBrowserGlobals: boolean;
+  hasProcessEnv: boolean;
+  hasMutableExports: boolean;
 }
 
 const SKIP_DIRS = new Set(['node_modules', 'dist', '.git', '.next', 'coverage', 'out', 'build']);
@@ -43,6 +47,10 @@ const ARROW_RE = /(?:const|let|var)\s+\w+\s*=\s*(?:async\s+)?\(.*?\)\s*=>/g;
 const EXPORT_RE = /^export\s/gm;
 // console.log calls anywhere in the file
 const CONSOLE_LOG_RE = /\bconsole\.log\b/g;
+const REACT_SIGNAL_RE = /\b(useState|useEffect|useMemo|useCallback|useRef|useReducer|React\.)\b/;
+const BROWSER_GLOBAL_RE = /\b(window|document|navigator|localStorage|sessionStorage)\b/;
+const PROCESS_ENV_RE = /\bprocess\.env\b/;
+const MUTABLE_EXPORT_RE = /^export\s+(let|var)\s/gm;
 
 function collectAllFiles(rootDir: string): { paths: string[]; skipped: SkippedFile[] } {
   let entries: import('node:fs').Dirent[];
@@ -199,6 +207,10 @@ export async function analyse(projectRoot: string): Promise<AnalyseResult> {
       exports: countMatches(content, EXPORT_RE),
       consoleLogs: countMatches(content, CONSOLE_LOG_RE),
       hasTest: testFileExists(filePath, allPaths),
+      hasReactSignals: REACT_SIGNAL_RE.test(content),
+      hasBrowserGlobals: BROWSER_GLOBAL_RE.test(content),
+      hasProcessEnv: PROCESS_ENV_RE.test(content),
+      hasMutableExports: MUTABLE_EXPORT_RE.test(content),
     });
   }
 

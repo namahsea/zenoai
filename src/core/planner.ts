@@ -41,6 +41,10 @@ function buildCompactFileSummary(
     lineCount: report?.lines ?? 0,
     functionCount: report?.functions ?? 0,
     hasTests: report?.hasTest ?? false,
+    hasReactSignals: report?.hasReactSignals ?? false,
+    hasBrowserGlobals: report?.hasBrowserGlobals ?? false,
+    hasProcessEnv: report?.hasProcessEnv ?? false,
+    hasMutableExports: report?.hasMutableExports ?? false,
   };
 }
 

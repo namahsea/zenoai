@@ -44,6 +44,25 @@ function mergeAndCleanBranch(sourceBranch: string, targetBranch: string): void {
   execSync(`git branch -D ${sourceBranch}`, { stdio: 'inherit' });
 }
 
+function historySkipReason(result: ValidatorResult): string {
+  if (result.largeFileAdvisory) {
+    return `large file advisory: ${result.largeFileAdvisory.safestFirstStep}`;
+  }
+  return result.skipReason ?? 'skipped';
+}
+
+function printSkippedResult(result: ValidatorResult): void {
+  const score = formatConfidenceScore(result.confidenceScore);
+  const reason = result.skipReason ?? '';
+  console.log(`  ${chalk.cyan(result.filePath.padEnd(REPORT_PATH_COL_WIDTH))} ${chalk.red(score)}   ${chalk.dim(reason)}`);
+  if (result.largeFileAdvisory) {
+    console.log(`  ${chalk.dim('Safest first step:')} ${result.largeFileAdvisory.safestFirstStep}`);
+    for (const candidate of result.largeFileAdvisory.extractionCandidates.slice(0, 3)) {
+      console.log(`  ${chalk.dim('- ' + candidate)}`);
+    }
+  }
+}
+
 export async function runDiffer(
   results: ValidatorResult[],
   manifest: ZenoManifest,
@@ -91,6 +110,14 @@ export async function runDiffer(
   const acceptedCount = results.filter(r => r.status === 'accepted').length;
   if (acceptedCount === 0) {
     console.log(chalk.yellow('No files were accepted this run. Nothing to apply.'));
+    const skippedResults = results.filter(result => result.status === 'skipped');
+    if (skippedResults.length > 0) {
+      console.log(chalk.bold.white(`\nSKIPPED (${skippedResults.length} files)\n`));
+      for (const result of skippedResults) {
+        printSkippedResult(result);
+      }
+      console.log('');
+    }
 
     // TODO: architectural debt — history management belongs in orchestrator.ts
     // Deferred to avoid scope creep. Move both saveHistory calls (here and in
@@ -99,7 +126,7 @@ export async function runDiffer(
     // Save skipped files to history so they aren't re-selected next run
     const skippedEntries = results
       .filter(r => r.status === 'skipped')
-      .map(r => ({ path: r.filePath, reason: r.skipReason ?? 'skipped' }));
+      .map(r => ({ path: r.filePath, reason: historySkipReason(r) }));
 
     if (skippedEntries.length > 0) {
       await saveHistory(
@@ -128,7 +155,7 @@ export async function runDiffer(
   // Save accepted and skipped files to run history
   const skippedEntries = results
     .filter(r => r.status === 'skipped')
-    .map(r => ({ path: r.filePath, reason: r.skipReason ?? 'confidence below threshold' }));
+    .map(r => ({ path: r.filePath, reason: historySkipReason(r) }));
 
   await saveHistory(
     process.cwd(),
@@ -155,9 +182,7 @@ export async function runDiffer(
 
   console.log(chalk.bold.white(`\nSKIPPED (${skippedResults.length} files)\n`));
   for (const result of skippedResults) {
-    const score = formatConfidenceScore(result.confidenceScore);
-    const reason = result.skipReason ?? '';
-    console.log(`  ${chalk.cyan(result.filePath.padEnd(REPORT_PATH_COL_WIDTH))} ${chalk.red(score)}   ${chalk.dim(reason)}`);
+    printSkippedResult(result);
   }
 
   console.log('\n' + chalk.cyan('─────────────────────────────────') + '\n');

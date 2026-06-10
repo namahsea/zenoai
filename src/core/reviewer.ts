@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import { generateCompletion, extractJson } from '../utils/llm.js';
+import { MAX_AUTONOMOUS_REFACTOR_LINES } from './refactorLimits.js';
 
 export interface ReviewerResult {
   filePath: string;
@@ -24,12 +25,12 @@ export async function runReviewer(
   }
 
   const lineCount = fileSource.split('\n').length;
-  if (lineCount > 300) {
+  if (lineCount > MAX_AUTONOMOUS_REFACTOR_LINES) {
     return {
       filePath,
       changes: [],
       skip: true,
-      skipReason: `file too large for autonomous refactoring (${lineCount} lines) — split into smaller modules first`,
+      skipReason: `file too large for autonomous refactoring (${lineCount} lines, limit ${MAX_AUTONOMOUS_REFACTOR_LINES})`,
     };
   }
 

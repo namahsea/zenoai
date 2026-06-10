@@ -1,5 +1,7 @@
 import * as fs from 'node:fs/promises';
 import { generateCompletion } from '../utils/llm.js';
+import type { LargeFileAdvisory } from './largeFileAdvisor.js';
+import { MAX_AUTONOMOUS_REFACTOR_LINES } from './refactorLimits.js';
 
 export interface ValidatorResult {
   filePath: string;
@@ -9,6 +11,7 @@ export interface ValidatorResult {
   testFile?: string;
   skipReason?: string;
   linesChanged?: number;
+  largeFileAdvisory?: LargeFileAdvisory;
 }
 
 export async function runValidator(
@@ -25,12 +28,12 @@ export async function runValidator(
   }
 
   const lineCount = rawSource.split('\n').length;
-  if (lineCount > 300) {
+  if (lineCount > MAX_AUTONOMOUS_REFACTOR_LINES) {
     return {
       filePath,
       status: 'skipped' as const,
       confidenceScore: 0,
-      skipReason: `file too large for autonomous refactoring (${lineCount} lines) — split into smaller modules first`,
+      skipReason: `file too large for autonomous refactoring (${lineCount} lines, limit ${MAX_AUTONOMOUS_REFACTOR_LINES})`,
       linesChanged: 0,
     };
   }
