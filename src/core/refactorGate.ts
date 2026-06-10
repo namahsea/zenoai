@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { basename } from 'node:path';
 import type { FileReport } from './analyst.js';
 import { MAX_AUTONOMOUS_REFACTOR_LINES } from './refactorLimits.js';
+import { isHighConsequencePath } from './riskSignals.js';
 
 export type RefactorGateDecision =
   | { kind: 'refactor' }
@@ -56,6 +57,16 @@ function isTrivialForAction(source: string, report: FileReport | undefined, acti
   return meaningfulLineCount(source) <= 25;
 }
 
+function shouldRequireTestsBeforeCleanup(
+  filePath: string,
+  action: 'humanise' | 'slim' | 'stress-test',
+  report: FileReport | undefined,
+): boolean {
+  if (action === 'stress-test') return false;
+  if (report?.hasTest) return false;
+  return isHighConsequencePath(filePath);
+}
+
 export async function runRefactorGate(
   filePath: string,
   action: 'humanise' | 'slim' | 'stress-test',
@@ -77,6 +88,13 @@ export async function runRefactorGate(
 
   if (hasGeneratedMarker(source)) {
     return { kind: 'skip', reason: 'auto-generated file marker found near top of file' };
+  }
+
+  if (shouldRequireTestsBeforeCleanup(filePath, action, report)) {
+    return {
+      kind: 'skip',
+      reason: 'high-consequence route with no tests — run Stress test it before refactoring',
+    };
   }
 
   if (isSimpleRouteWrapper(filePath, source, report)) {

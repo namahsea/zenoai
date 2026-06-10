@@ -1,6 +1,7 @@
 import type { DependencyGraph, FileReport } from './analyst.js';
 import { getRefactoredPaths } from './history.js';
 import { generateCompletion, extractJson } from '../utils/llm.js';
+import { isHighConsequencePath } from './riskSignals.js';
 
 export interface PlannerResult {
   selectedFiles: string[];
@@ -45,6 +46,7 @@ function buildCompactFileSummary(
     hasBrowserGlobals: report?.hasBrowserGlobals ?? false,
     hasProcessEnv: report?.hasProcessEnv ?? false,
     hasMutableExports: report?.hasMutableExports ?? false,
+    isHighConsequence: isHighConsequencePath(path),
   };
 }
 
@@ -121,9 +123,10 @@ Rules:
 - Prefer larger files (more lines = more to improve)
 - Never select two files where one appears in the other's importedBy list
 - Never select files that look like configuration, generated code, or type definitions
-- For action "humanise": prefer files with high function count and no tests
-- For action "slim": prefer files with high line count
-- For action "stress-test": prefer files with no tests regardless of size
+- For action "humanise": prefer medium-risk files with local complexity, vague names, magic constants, duplicated helpers, or bloated functions
+- For action "humanise": avoid untested high-consequence files such as webhooks, auth, billing, subscriptions, checkout, payment, order, cart, or database-write routes; those need tests before cleanup
+- For action "slim": prefer files with high line count but avoid untested high-consequence files unless the change is obviously dead code cleanup
+- For action "stress-test": prefer untested high-consequence files first, especially webhooks, auth, billing, subscriptions, checkout, payment, order, cart, and data-write routes
 
 Strict Output Requirements:
 - Return ONLY valid JSON. No markdown formatting, no backticks, no explanations.
