@@ -124,3 +124,33 @@ It has been tested on real projects and can produce reviewable human-style diffs
 - Bump version to `0.2.0`
 - Publish to npm
 - Document Phase 2 user-facing behavior
+
+---
+
+## Billing and cost display note
+
+During local testing, Zeno may show a rough provider cost estimate so the tester can understand real API spend while validating the product.
+
+This is a temporary testing affordance, not the intended production UX.
+
+**Current testing behavior:**
+
+- Show a max estimated provider cost before Phase 2 runs
+- Label it as a maximum estimate because local skips and safety skips can reduce actual calls
+- Keep it visible while the founder/tester is paying provider bills directly
+
+**Production direction:**
+
+- Remove raw provider-dollar cost from the CLI before public launch
+- Do not position Zeno as a metered API wrapper
+- Introduce Zeno-owned auth and billing before hosted/production usage
+- Prefer a credit-based model, possibly subscription plus included credits and top-ups
+- Expose user-facing usage as Zeno credits, not OpenAI/Anthropic/Gemini provider cost
+
+**Likely pricing shape:**
+
+- Free tier: limited health reports and possibly one small refactor run
+- Pro tier: monthly subscription with included Zeno credits
+- Credit packs: pay-as-you-go top-ups for heavier usage
+
+Raw provider costs should remain internal analytics once billing exists.
