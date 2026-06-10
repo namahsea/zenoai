@@ -5,12 +5,22 @@ import chalk from 'chalk';
 import Table from 'cli-table3';
 import boxen from 'boxen';
 import ora from 'ora';
-import { access } from 'node:fs/promises';
-import { join } from 'node:path';
+import { access, readFile, writeFile } from 'node:fs/promises';
+import { join, basename } from 'node:path';
 import { analyse } from './analyst.js';
 import { saveReport } from './cache.js';
+import { runPreflight, rollback } from './preflight.js';
+import { runPlanner } from './planner.js';
+import { runReviewer } from './reviewer.js';
+import { runValidator } from './validator.js';
+import type { ValidatorResult } from './validator.js';
+import { runCritic } from './critic.js';
+import { runLargeFileAdvisor } from './largeFileAdvisor.js';
+import { confirm } from '@inquirer/prompts';
+import { runDiffer } from './differ.js';
 import type { ZenoConfig } from '../config.js';
 import type { HealthReport, RiskLevel, HealthLabel } from '../types.js';
+import { MAX_AUTONOMOUS_REFACTOR_LINES } from './refactorLimits.js';
 
 export interface RunOptions {
   role: string;
@@ -142,10 +152,22 @@ function scoreChalk(label: HealthLabel): (text: string) => string {
   }
 }
 
-export async function runOrchestrator(opts: RunOptions): Promise<void> {
-  console.log(chalk.dim(`role: ${opts.role}  |  action: ${opts.action}\n`));
+function actionSlug(action: string): string {
+  return action.toLowerCase().replace(/\s+/g, '-');
+}
 
-  if (opts.role === 'Senior Developer' && opts.action === 'Eyeball it') {
+function isReadOnlyReportAction(role: string, action: string): boolean {
+  return (
+    (role === 'Senior Developer' && action === 'Eyeball it') ||
+    (role === 'EM' && (action === 'How bad is it' || action === 'Triage it'))
+  );
+}
+
+export async function runOrchestrator(opts: RunOptions): Promise<void> {
+  const normalizedAction = actionSlug(opts.action);
+  console.log(chalk.dim(`role: ${opts.role}  |  action: ${normalizedAction}\n`));
+
+  if (isReadOnlyReportAction(opts.role, opts.action)) {
     const root = process.cwd();
 
     const MAX_SEND = 50;
@@ -286,7 +308,7 @@ export async function runOrchestrator(opts: RunOptions): Promise<void> {
       process.exit(1);
     }
 
-    printReport(report, root, files.length);
+    printReport(report, root, files.length, normalizedAction);
     await saveReport(report, root, files.length);
 
     process.exit(0);
@@ -297,7 +319,7 @@ export async function runOrchestrator(opts: RunOptions): Promise<void> {
   process.exit(0);
 }
 
-function printReport(report: HealthReport, root: string, fileCount: number): void {
+function printReport(report: HealthReport, root: string, fileCount: number, action: string): void {
   const now = new Date();
   const date = now.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
   const time = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
@@ -308,6 +330,7 @@ function printReport(report: HealthReport, root: string, fileCount: number): voi
   console.log(chalk.bold.white('━━━  ZENOAI — CODEBASE HEALTH REPORT  ━━━'));
   console.log(chalk.dim(`Directory : ${root}`));
   console.log(chalk.dim(`Files     : ${fileCount}`));
+  console.log(chalk.dim(`Action    : ${action}`));
   console.log(chalk.dim(`Date      : ${datetime}\n`));
 
   // ── Health Score ─────────────────────────────────────────────────────────────
@@ -382,4 +405,116 @@ function legibilityColor(score: number): string {
   if (score >= 8) return chalk.green(String(score));
   if (score >= 5) return chalk.yellow(String(score));
   return chalk.red(String(score));
+}
+
+export async function runPhase2(
+  projectPath: string,
+  action: 'humanise' | 'slim' | 'stress-test',
+  persona: string,
+): Promise<void> {
+  // Step 1 — preflight
+  const preflight = await runPreflight();
+  if (!preflight.passed) {
+    console.error(chalk.red('Cannot start — ' + preflight.errors.join(', ')));
+    process.exit(1);
+  }
+
+  // Step 2 — analyst
+  const spinner = ora('Analysing codebase...').start();
+  const { reports, graph } = await analyse(projectPath);
+  const reportByPath = new Map(reports.map(report => [report.path, report]));
+  spinner.succeed(`Found ${reports.length} files`);
+
+  // Step 3 — planner
+  spinner.start('Planning safe refactor order...');
+  const plan = await runPlanner(graph, reports, action);
+  spinner.succeed(`Selected ${plan.selectedFiles.length} files to refactor`);
+
+  if (plan.selectedFiles.length === 0) {
+    console.log(chalk.yellow('No files selected for this action. Try a different action or project.'));
+    process.exit(0);
+  }
+
+  const { loadHistory } = await import('./history.js');
+  const runHistory = await loadHistory(process.cwd());
+  const skippedCount = runHistory.actions[action]?.skipped?.length ?? 0;
+
+  if (skippedCount > 0) {
+    console.log(chalk.dim(`ⓘ ${skippedCount} files previously flagged as too complex — skipped.`));
+    console.log(chalk.dim(`  To retry: remove them from .zeno-history.json`));
+  }
+
+  // [COST_DISPLAY] — comment out this entire block when subscription model is active
+  const estimatedCost = (plan.selectedFiles.length * 0.18).toFixed(2);
+
+  console.log(chalk.cyan('\nFiles selected for refactoring:'));
+  plan.selectedFiles.forEach((f, i) => {
+    console.log(chalk.white(`  ${i + 1}. ${f}`));
+  });
+
+  console.log('');
+  console.log(chalk.yellow(`Estimated API cost: ~$${estimatedCost} (${plan.selectedFiles.length} files × 3 calls)`));
+
+  const proceedWithCost = await confirm({ message: 'Proceed with this run?', default: true });
+
+  if (!proceedWithCost) {
+    console.log(chalk.yellow('\nRun cancelled. Cleaning up...'));
+    await rollback(preflight.manifestPath);
+    console.log(chalk.yellow('Branch removed. Your repo is unchanged.'));
+    process.exit(0);
+  }
+  // [/COST_DISPLAY]
+
+  // Step 4 — reviewer + validator + critic loop
+  const results: ValidatorResult[] = [];
+  for (const filePath of plan.selectedFiles) {
+    spinner.start(`Reviewing ${basename(filePath)}...`);
+    const reviewed = await runReviewer(filePath, action);
+
+    if (reviewed.skip) {
+      const fileReport = reportByPath.get(filePath);
+      const skippedResult: ValidatorResult = {
+        filePath,
+        status: 'skipped' as const,
+        confidenceScore: 0,
+        skipReason: reviewed.skipReason ?? 'reviewer skipped this file',
+      };
+
+      if ((fileReport?.lines ?? 0) > MAX_AUTONOMOUS_REFACTOR_LINES) {
+        spinner.start(`Preparing split advisory for ${basename(filePath)}...`);
+        const advisory = await runLargeFileAdvisor(filePath, action, fileReport);
+        skippedResult.skipReason = advisory.reason;
+        skippedResult.largeFileAdvisory = advisory;
+      }
+
+      spinner.warn(`Skipped ${basename(filePath)}: ${skippedResult.skipReason}`);
+      results.push(skippedResult);
+      continue;
+    }
+
+    spinner.start(`Validating ${basename(filePath)}...`);
+    const validated = await runValidator(filePath, reviewed.changes, action);
+    if (validated.status === 'skipped') {
+      spinner.warn(`Skipped ${basename(filePath)}: ${validated.skipReason}`);
+      results.push(validated);
+      continue;
+    }
+
+    spinner.start(`Critiquing ${basename(filePath)} boundaries...`);
+    const critiqued = await runCritic(validated, reviewed.changes, action);
+    if (critiqued.status === 'skipped') {
+      spinner.warn(`Skipped ${basename(filePath)}: ${critiqued.skipReason}`);
+    } else {
+      spinner.succeed(`${basename(filePath)} — score ${critiqued.confidenceScore}`);
+    }
+    results.push(critiqued);
+  }
+
+  // Step 5 — differ
+  const manifest = JSON.parse(await readFile(preflight.manifestPath, 'utf8')) as Record<string, unknown>;
+  manifest['action'] = action;
+  manifest['persona'] = persona;
+  await writeFile(preflight.manifestPath, JSON.stringify(manifest, null, 2));
+
+  await runDiffer(results, manifest as unknown as Parameters<typeof runDiffer>[1], preflight.manifestPath);
 }

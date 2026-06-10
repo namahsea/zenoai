@@ -1,0 +1,1 @@
+export const MAX_AUTONOMOUS_REFACTOR_LINES = 300;

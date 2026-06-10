@@ -7,7 +7,7 @@ import { resolve, basename, join, sep } from 'node:path';
 import { exec } from 'node:child_process';
 import ora from 'ora';
 import { ensureConfig } from './config.js';
-import { runOrchestrator } from './core/orchestrator.js';
+import { runOrchestrator, runPhase2 } from './core/orchestrator.js';
 import { loadReport } from './core/cache.js';
 import { generateHtml } from './core/htmlExporter.js';
 
@@ -15,14 +15,19 @@ const { version } = JSON.parse(readFileSync(new URL('../package.json', import.me
 
 const ROLES = [
   'Senior Developer',
-  // 'EM',
-  // 'Architect',
-  // 'QA',
+  'EM',
 ] as const;
-const ACTIONS = [
+
+const SDE_ACTIONS = [
   'Eyeball it',
-  // 'Deep dive',
-  // 'Complexity report',
+  'Humanise it',
+  'Slim it down',
+  'Stress test it',
+] as const;
+
+const EM_ACTIONS = [
+  'How bad is it',
+  'Triage it',
 ] as const;
 
 type GuardResult =
@@ -175,14 +180,30 @@ async function main() {
     default: 'Senior Developer',
   });
 
-  const action = await select({
-    message: 'What do you want?',
-    choices: ACTIONS.map((a) => ({ value: a })),
-    default: 'Eyeball it',
-  });
+  let action: string;
+  if (role === 'Senior Developer') {
+    action = await select({
+      message: 'What do you want?',
+      choices: SDE_ACTIONS.map((a) => ({ value: a })),
+    });
+  } else {
+    action = await select({
+      message: 'What do you want?',
+      choices: EM_ACTIONS.map((a) => ({ value: a })),
+    });
+  }
 
   console.log('');
-  await runOrchestrator({ role, action, config });
+
+  if (action === 'Eyeball it' || action === 'How bad is it' || action === 'Triage it') {
+    await runOrchestrator({ role, action, config });
+  } else if (action === 'Humanise it') {
+    await runPhase2(process.cwd(), 'humanise', role);
+  } else if (action === 'Slim it down') {
+    await runPhase2(process.cwd(), 'slim', role);
+  } else if (action === 'Stress test it') {
+    await runPhase2(process.cwd(), 'stress-test', role);
+  }
 }
 
 main().catch((err) => {

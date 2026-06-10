@@ -105,7 +105,7 @@ npx zenoai
 | Phase | Status | Description |
 |-------|--------|-------------|
 | Phase 1 — Eyeball it | ✅ Live | Read-only codebase health report |
-| Phase 2 — Fix it | 🔄 Coming soon | Autonomous refactoring with tests-first safety |
+| Phase 2 — Fix it | 🧪 In testing | Guarded autonomous refactoring with git safety and review approval |
 | Phase 3 — Scale it | 🔜 Planned | No API key needed, Zeno handles everything |
 
 ## 📦 Changelog
