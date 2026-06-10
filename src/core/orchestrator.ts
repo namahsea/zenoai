@@ -16,11 +16,11 @@ import { runValidator } from './validator.js';
 import type { ValidatorResult } from './validator.js';
 import { runCritic } from './critic.js';
 import { runLargeFileAdvisor } from './largeFileAdvisor.js';
+import { runRefactorGate } from './refactorGate.js';
 import { confirm } from '@inquirer/prompts';
 import { runDiffer } from './differ.js';
 import type { ZenoConfig } from '../config.js';
 import type { HealthReport, RiskLevel, HealthLabel } from '../types.js';
-import { MAX_AUTONOMOUS_REFACTOR_LINES } from './refactorLimits.js';
 
 export interface RunOptions {
   role: string;
@@ -453,7 +453,8 @@ export async function runPhase2(
   });
 
   console.log('');
-  console.log(chalk.yellow(`Estimated API cost: ~$${estimatedCost} (${plan.selectedFiles.length} files × 3 calls)`));
+  console.log(chalk.yellow(`Estimated max API cost: ~$${estimatedCost} (${plan.selectedFiles.length} files × 3 calls)`));
+  console.log(chalk.dim('Actual cost may be lower when files are skipped locally.'));
 
   const proceedWithCost = await confirm({ message: 'Proceed with this run?', default: true });
 
@@ -468,24 +469,44 @@ export async function runPhase2(
   // Step 4 — reviewer + validator + critic loop
   const results: ValidatorResult[] = [];
   for (const filePath of plan.selectedFiles) {
+    const fileReport = reportByPath.get(filePath);
+    const gateDecision = await runRefactorGate(filePath, action, fileReport);
+
+    if (gateDecision.kind === 'large-file-advisory') {
+      spinner.start(`Preparing split advisory for ${basename(filePath)}...`);
+      const advisory = await runLargeFileAdvisor(filePath, action, fileReport);
+      spinner.warn(`Skipped ${basename(filePath)}: ${advisory.reason}`);
+      results.push({
+        filePath,
+        status: 'skipped' as const,
+        confidenceScore: 0,
+        skipReason: advisory.reason,
+        largeFileAdvisory: advisory,
+      });
+      continue;
+    }
+
+    if (gateDecision.kind === 'skip') {
+      spinner.warn(`Skipped ${basename(filePath)}: ${gateDecision.reason}`);
+      results.push({
+        filePath,
+        status: 'skipped' as const,
+        confidenceScore: 0,
+        skipReason: gateDecision.reason,
+      });
+      continue;
+    }
+
     spinner.start(`Reviewing ${basename(filePath)}...`);
     const reviewed = await runReviewer(filePath, action);
 
     if (reviewed.skip) {
-      const fileReport = reportByPath.get(filePath);
       const skippedResult: ValidatorResult = {
         filePath,
         status: 'skipped' as const,
         confidenceScore: 0,
         skipReason: reviewed.skipReason ?? 'reviewer skipped this file',
       };
-
-      if ((fileReport?.lines ?? 0) > MAX_AUTONOMOUS_REFACTOR_LINES) {
-        spinner.start(`Preparing split advisory for ${basename(filePath)}...`);
-        const advisory = await runLargeFileAdvisor(filePath, action, fileReport);
-        skippedResult.skipReason = advisory.reason;
-        skippedResult.largeFileAdvisory = advisory;
-      }
 
       spinner.warn(`Skipped ${basename(filePath)}: ${skippedResult.skipReason}`);
       results.push(skippedResult);
