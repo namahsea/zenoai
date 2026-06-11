@@ -169,7 +169,7 @@ async function main() {
   guardSpinner.stop();
 
   if (guardResult.status === 'ok' && guardResult.selfRun) {
-    console.log(chalk.yellow('⚠  Looks like you\'re running Zeno on itself. That\'s very meta. Results may be biased.\n'));
+    console.log(chalk.yellow('⚠  You are running Zeno on its own codebase. Results may be less useful.\n'));
   }
 
   const config = await ensureConfig();

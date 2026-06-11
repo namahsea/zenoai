@@ -264,7 +264,7 @@ export async function runStaticSplit(fileReport: FileReport): Promise<ValidatorR
       filePath: fileReport.path,
       status: 'skipped',
       confidenceScore: 0,
-      skipReason: 'no safe top-level static constants or data blocks found to split automatically',
+      skipReason: 'Zeno could not find static constants or data that are safe to move automatically',
     };
   }
 
@@ -290,7 +290,7 @@ export async function runStaticSplit(fileReport: FileReport): Promise<ValidatorR
       filePath: fileReport.path,
       status: 'skipped',
       confidenceScore: 0,
-      skipReason: `split output failed syntax validation: ${originalSyntaxError}`,
+      skipReason: `split did not pass syntax checks: ${originalSyntaxError}`,
     };
   }
 
@@ -300,7 +300,7 @@ export async function runStaticSplit(fileReport: FileReport): Promise<ValidatorR
       filePath: fileReport.path,
       status: 'skipped',
       confidenceScore: 0,
-      skipReason: `created split module failed syntax validation: ${splitSyntaxError}`,
+      skipReason: `new split file did not pass syntax checks: ${splitSyntaxError}`,
     };
   }
 
@@ -313,7 +313,7 @@ export async function runStaticSplit(fileReport: FileReport): Promise<ValidatorR
       filePath: fileReport.path,
       status: 'skipped',
       confidenceScore: 0,
-      skipReason: `created split module is missing exports: ${missingExports.join(', ')}`,
+      skipReason: `new split file did not export: ${missingExports.join(', ')}`,
     };
   }
 

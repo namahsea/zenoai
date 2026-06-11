@@ -35,7 +35,7 @@ export async function runValidator(
       filePath,
       status: 'skipped' as const,
       confidenceScore: 0,
-      skipReason: `file too large for autonomous refactoring (${lineCount} lines, limit ${MAX_AUTONOMOUS_REFACTOR_LINES})`,
+      skipReason: `file is too large for this action (${lineCount} lines, limit ${MAX_AUTONOMOUS_REFACTOR_LINES})`,
       linesChanged: 0,
     };
   }

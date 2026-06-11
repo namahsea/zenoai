@@ -414,7 +414,12 @@ function printNoStrongTargetsMessage(
   action: 'humanise' | 'slim' | 'stress-test',
   skippedFiles: Array<{ path: string; reason: string }> = [],
 ): void {
-  console.log(chalk.yellow(`No strong ${action} targets found.`));
+  const actionLabel = action === 'humanise'
+    ? 'Humanise'
+    : action === 'slim'
+      ? 'Slim it down'
+      : 'Stress test';
+  console.log(chalk.yellow(`No useful ${actionLabel} targets found.`));
   const skippedText = skippedFiles.map(s => `${s.path} ${s.reason}`).join('\n').toLowerCase();
 
   if (action === 'humanise' || action === 'slim') {
@@ -432,14 +437,14 @@ function printNoStrongTargetsMessage(
       recommendations.push('Try a different action or a narrower project directory with more local business logic.');
     }
 
-    console.log(chalk.dim('Most remaining files are already too small, framework shells, config/integration files, high-consequence without tests, or better suited for splitting.'));
+    console.log(chalk.dim('Most remaining files are already too small, framework setup files, configuration files, risky untested files, or better suited for splitting.'));
     for (const recommendation of recommendations) {
       console.log(chalk.dim(recommendation));
     }
     return;
   }
 
-  console.log(chalk.dim('No useful test targets were found after local safety filters. Try a different project area or reset .zeno-history.json.'));
+  console.log(chalk.dim('No useful test targets were found. Try a different project area with more business logic.'));
 }
 
 function printViabilitySummary(
@@ -460,7 +465,7 @@ function printViabilitySummary(
   }
 
   if (viability.weakCleanupTarget.length > 0) {
-    console.log(chalk.dim('\nWeak Humanise targets:'));
+    console.log(chalk.dim('\nLow-impact cleanup targets:'));
     for (const filePath of viability.weakCleanupTarget) {
       console.log(chalk.dim(`  - ${filePath}`));
     }
@@ -485,14 +490,14 @@ export async function runPhase2(
   const reportByPath = new Map(reports.map(report => [report.path, report]));
   spinner.succeed(`Found ${reports.length} files`);
 
-  spinner.start('Filtering safe candidates...');
+  spinner.start('Finding files Zeno can safely change...');
   const preGate = await runPrePlannerGate(reports, action);
-  spinner.succeed(`Eligible ${preGate.eligibleReports.length} files after local gating`);
+  spinner.succeed(`${preGate.eligibleReports.length} files look changeable`);
 
   if (preGate.skippedFiles.length > 0) {
-    console.log(chalk.dim(`ⓘ ${preGate.skippedFiles.length} files excluded before planning.`));
+    console.log(chalk.dim(`ⓘ ${preGate.skippedFiles.length} files skipped before review.`));
     for (const skipped of preGate.skippedFiles.slice(0, 8)) {
-      console.log(chalk.dim(`  skipped before planning: ${skipped.path} (${skipped.reason})`));
+      console.log(chalk.dim(`  skipped: ${skipped.path} (${skipped.reason})`));
     }
     if (preGate.skippedFiles.length > 8) {
       console.log(chalk.dim(`  ...and ${preGate.skippedFiles.length - 8} more`));
@@ -507,9 +512,9 @@ export async function runPhase2(
   }
 
   // Step 3 — planner
-  spinner.start('Planning safe refactor order...');
+  spinner.start('Choosing the safest files to change...');
   const plan = await runPlanner(graph, preGate.eligibleReports, action);
-  spinner.succeed(`Selected ${plan.selectedFiles.length} files to refactor`);
+  spinner.succeed(`Selected ${plan.selectedFiles.length} files`);
 
   if (plan.selectedFiles.length === 0) {
     printNoStrongTargetsMessage(action, preGate.skippedFiles);
@@ -519,7 +524,7 @@ export async function runPhase2(
 
   const viability = classifySelectedFiles(plan.selectedFiles, reportByPath);
   if (action === 'humanise' && viability.refactorable.length === 0) {
-    console.log(chalk.yellow('No safe Humanise targets found before paid model calls.'));
+    console.log(chalk.yellow('No safe Humanise targets found. No AI review was started.'));
     printViabilitySummary(viability);
     console.log(chalk.dim('\nRecommended next action: run Split it for large components, or Stress test it for risky untested components.'));
     await rollback(preflight.manifestPath);
@@ -527,7 +532,7 @@ export async function runPhase2(
   }
 
   if (action === 'humanise' && viability.refactorable.length === 1 && plan.selectedFiles.length > 3) {
-    console.log(chalk.yellow(`Only 1 safe Humanise target found out of ${plan.selectedFiles.length} selected files.`));
+    console.log(chalk.yellow(`Only 1 useful Humanise target found out of ${plan.selectedFiles.length} selected files.`));
     printViabilitySummary(viability);
     const continueWithSingleTarget = await confirm({
       message: `Continue with ${viability.refactorable[0]} only?`,
@@ -547,8 +552,8 @@ export async function runPhase2(
   const skippedCount = runHistory.actions[action]?.skipped?.length ?? 0;
 
   if (skippedCount > 0) {
-    console.log(chalk.dim(`ⓘ ${skippedCount} files previously flagged as too complex — skipped.`));
-    console.log(chalk.dim(`  To retry: remove them from .zeno-history.json`));
+    console.log(chalk.dim(`ⓘ ${skippedCount} files were skipped in previous ${action} runs.`));
+    console.log(chalk.dim('  Zeno will avoid retrying the same low-value changes automatically.'));
   }
 
   // [COST_DISPLAY] — comment out this entire block when subscription model is active
@@ -560,8 +565,8 @@ export async function runPhase2(
   });
 
   console.log('');
-  console.log(chalk.yellow(`Estimated max API cost: ~$${estimatedCost} (${plan.selectedFiles.length} files × 3 calls)`));
-  console.log(chalk.dim('Actual cost may be lower when files are skipped locally.'));
+  console.log(chalk.yellow(`Estimated max API cost: ~$${estimatedCost}`));
+  console.log(chalk.dim(`Based on up to ${plan.selectedFiles.length} files. Actual cost may be lower if Zeno skips files during review.`));
 
   const proceedWithCost = await confirm({ message: 'Proceed with this run?', default: true });
 
@@ -580,7 +585,7 @@ export async function runPhase2(
     const gateDecision = await runRefactorGate(filePath, action, fileReport);
 
     if (gateDecision.kind === 'large-file-advisory') {
-      spinner.start(`Preparing split advisory for ${basename(filePath)}...`);
+      spinner.start(`Finding the safest first split for ${basename(filePath)}...`);
       const advisory = await runLargeFileAdvisor(filePath, action, fileReport);
       spinner.warn(`Skipped ${basename(filePath)}: ${advisory.reason}`);
       results.push({
@@ -604,7 +609,7 @@ export async function runPhase2(
       continue;
     }
 
-    spinner.start(`Reviewing ${basename(filePath)}...`);
+    spinner.start(`Planning changes for ${basename(filePath)}...`);
     const reviewed = await runReviewer(filePath, action);
 
     if (reviewed.skip) {
@@ -620,7 +625,7 @@ export async function runPhase2(
       continue;
     }
 
-    spinner.start(`Validating ${basename(filePath)}...`);
+    spinner.start(`Checking ${basename(filePath)}...`);
     const validated = await runValidator(filePath, reviewed.changes, action);
     if (validated.status === 'skipped') {
       spinner.warn(`Skipped ${basename(filePath)}: ${validated.skipReason}`);
@@ -628,12 +633,12 @@ export async function runPhase2(
       continue;
     }
 
-    spinner.start(`Critiquing ${basename(filePath)} boundaries...`);
+    spinner.start(`Checking final diff for ${basename(filePath)}...`);
     const critiqued = await runCritic(validated, reviewed.changes, action);
     if (critiqued.status === 'skipped') {
       spinner.warn(`Skipped ${basename(filePath)}: ${critiqued.skipReason}`);
     } else {
-      spinner.succeed(`${basename(filePath)} — score ${critiqued.confidenceScore}`);
+      spinner.succeed(`${basename(filePath)} — accepted with confidence ${critiqued.confidenceScore.toFixed(2)}`);
     }
     results.push(critiqued);
   }
@@ -657,7 +662,7 @@ export async function runSplit(
     .filter(report => report.lines > MAX_AUTONOMOUS_REFACTOR_LINES)
     .sort((a, b) => b.lines - a.lines);
 
-  spinner.succeed(`Found ${candidates.length} Split it candidate${candidates.length === 1 ? '' : 's'}`);
+  spinner.succeed(`Found ${candidates.length} large file${candidates.length === 1 ? '' : 's'} for Split it`);
 
   if (candidates.length === 0) {
     console.log(chalk.yellow('No large files found for Split it.'));
@@ -666,14 +671,14 @@ export async function runSplit(
   }
 
   const target = candidates[0];
-  console.log(chalk.cyan('\nSplit target:'));
+  console.log(chalk.cyan('\nStarting with:'));
   console.log(chalk.white(`  ${target.path} (${target.lines} lines, ${target.functions} functions)`));
   if (candidates.length > 1) {
     console.log(chalk.dim(`  ${candidates.length - 1} more large file${candidates.length === 2 ? '' : 's'} can be handled in later runs.`));
   }
 
-  console.log(chalk.dim('\nFirst Split it implementation: extract obvious top-level static constants/data into a sibling module.'));
-  console.log(chalk.dim('No model call is used for this MVP split.'));
+  console.log(chalk.dim('\nZeno will start with the safest split: moving static constants and data into a sibling module.'));
+  console.log(chalk.dim('This step does not spend API credits.'));
 
   const proceed = await confirm({ message: 'Proceed with this split?', default: true });
   if (!proceed) {

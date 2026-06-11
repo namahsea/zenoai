@@ -37,7 +37,7 @@ export interface DifferResult {
 }
 
 function formatConfidenceScore(score: number): string {
-  return `score ${score.toFixed(2)}`;
+  return `confidence ${score.toFixed(2)}`;
 }
 
 function mergeAndCleanBranch(sourceBranch: string, targetBranch: string): void {
@@ -177,7 +177,7 @@ export async function runDiffer(
 
   const acceptedCount = results.filter(r => r.status === 'accepted').length;
   if (acceptedCount === 0) {
-    console.log(chalk.yellow('No files were accepted this run. Nothing to apply.'));
+    console.log(chalk.yellow('No changes passed Zeno\'s safety checks. Nothing was applied.'));
     const skippedResults = results.filter(result => result.status === 'skipped');
     if (skippedResults.length > 0) {
       console.log(chalk.bold.white(`\nSKIPPED (${skippedResults.length} files)\n`));
@@ -212,7 +212,7 @@ export async function runDiffer(
   const validation = await runProjectValidation();
   if (!validation.passed) {
     await restoreUncommittedAcceptedFiles(results);
-    console.log(chalk.red(`Project validation failed after applying Zeno changes: ${validation.command}`));
+    console.log(chalk.red(`Project validation failed after Zeno applied changes: ${validation.command}`));
     console.log(chalk.dim(validation.reason));
 
     const skippedEntries = results
@@ -288,7 +288,7 @@ export async function runDiffer(
   console.log('\n' + chalk.cyan('─────────────────────────────────') + '\n');
 
   // Step 3 — pause and review prompt
-  console.log(chalk.green(`✓ Changes staged on branch: ${manifest.branch}`));
+  console.log(chalk.green(`✓ Changes committed on branch: ${manifest.branch}`));
   console.log(chalk.dim(`  Review in your IDE or run: git diff ${manifest.originalBranch}..${manifest.branch}\n`));
 
   const keepChanges = await confirm({ message: 'Keep these changes?', default: true });

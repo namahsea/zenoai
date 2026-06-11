@@ -151,7 +151,7 @@ export async function runRefactorGate(
   if ((report?.lines ?? 0) > MAX_AUTONOMOUS_REFACTOR_LINES) {
     return {
       kind: 'large-file-advisory',
-      reason: `file too large for autonomous refactoring (${report?.lines ?? 0} lines, limit ${MAX_AUTONOMOUS_REFACTOR_LINES})`,
+      reason: `file is too large for this action (${report?.lines ?? 0} lines, limit ${MAX_AUTONOMOUS_REFACTOR_LINES})`,
     };
   }
 
@@ -210,7 +210,7 @@ export async function runPrePlannerGate(
   for (const report of reports) {
     const decision = await runRefactorGate(report.path, action, report);
     if (decision.kind === 'skip') {
-      skippedFiles.push({ path: report.path, reason: `pre-planner gate: ${decision.reason}` });
+      skippedFiles.push({ path: report.path, reason: decision.reason });
       continue;
     }
 

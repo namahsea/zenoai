@@ -33,8 +33,8 @@ function fallbackAdvisory(
     reason,
     responsibilities: [],
     extractionCandidates: [],
-    safestFirstStep: 'Split the file into smaller modules before asking Zeno to refactor it autonomously.',
-    riskNotes: ['The file exceeds the autonomous whole-file rewrite limit.'],
+    safestFirstStep: 'Split the file into smaller modules before running a cleanup action.',
+    riskNotes: ['The file is too large for a safe single-pass cleanup.'],
   };
 }
 
@@ -60,7 +60,7 @@ export async function runLargeFileAdvisor(
   report: FileReport | undefined,
 ): Promise<LargeFileAdvisory> {
   const lineCount = report?.lines ?? 0;
-  const reason = `file too large for autonomous refactoring (${lineCount} lines, limit ${MAX_AUTONOMOUS_REFACTOR_LINES})`;
+  const reason = `file is too large for this action (${lineCount} lines, limit ${MAX_AUTONOMOUS_REFACTOR_LINES})`;
 
   let source: string;
   try {
@@ -69,11 +69,11 @@ export async function runLargeFileAdvisor(
     return fallbackAdvisory(filePath, lineCount, reason);
   }
 
-  const systemPrompt = `You are a senior TypeScript engineer advising on a file that is too large for autonomous whole-file refactoring.
+  const systemPrompt = `You are a senior TypeScript engineer advising on a file that is too large for a safe single-pass cleanup.
 Zeno will not rewrite this file. Your job is to produce a concise, read-only split plan.
 
 Current action target: ${action}
-Autonomous rewrite limit: ${MAX_AUTONOMOUS_REFACTOR_LINES} lines
+Single-pass cleanup limit: ${MAX_AUTONOMOUS_REFACTOR_LINES} lines
 
 Rules:
 - Do not propose a full rewrite.

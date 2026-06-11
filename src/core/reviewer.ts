@@ -30,7 +30,7 @@ export async function runReviewer(
       filePath,
       changes: [],
       skip: true,
-      skipReason: `file too large for autonomous refactoring (${lineCount} lines, limit ${MAX_AUTONOMOUS_REFACTOR_LINES})`,
+      skipReason: `file is too large for this action (${lineCount} lines, limit ${MAX_AUTONOMOUS_REFACTOR_LINES})`,
     };
   }
 
