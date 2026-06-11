@@ -1,9 +1,11 @@
 import type { FileReport } from './analyst.js';
 import { MAX_AUTONOMOUS_REFACTOR_LINES } from './refactorLimits.js';
+import { getSinglePassCleanupBlockReason } from './refactorRisk.js';
 
 export interface RefactorViability {
   refactorable: string[];
   advisoryOnly: string[];
+  complexityBlocked: string[];
   riskyUntestedVisual: string[];
   weakCleanupTarget: string[];
 }
@@ -31,6 +33,7 @@ export function classifySelectedFiles(
   const viability: RefactorViability = {
     refactorable: [],
     advisoryOnly: [],
+    complexityBlocked: [],
     riskyUntestedVisual: [],
     weakCleanupTarget: [],
   };
@@ -39,6 +42,11 @@ export function classifySelectedFiles(
     const report = reportByPath.get(filePath);
     if ((report?.lines ?? 0) > MAX_AUTONOMOUS_REFACTOR_LINES) {
       viability.advisoryOnly.push(filePath);
+      continue;
+    }
+
+    if (getSinglePassCleanupBlockReason(report, 'humanise')) {
+      viability.complexityBlocked.push(filePath);
       continue;
     }
 

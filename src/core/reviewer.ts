@@ -1,6 +1,8 @@
 import { readFile } from 'node:fs/promises';
 import { generateCompletion, extractJson } from '../utils/llm.js';
+import type { FileReport } from './analyst.js';
 import { MAX_AUTONOMOUS_REFACTOR_LINES } from './refactorLimits.js';
+import { getSinglePassCleanupBlockReason } from './refactorRisk.js';
 
 export interface ReviewerResult {
   filePath: string;
@@ -15,6 +17,7 @@ const MAX_REVIEWER_TOKENS = 2000;
 export async function runReviewer(
   filePath: string,
   action: 'humanise' | 'slim' | 'stress-test',
+  report?: FileReport,
 ): Promise<ReviewerResult> {
   // Step 1 — read the file
   let fileSource: string;
@@ -31,6 +34,16 @@ export async function runReviewer(
       changes: [],
       skip: true,
       skipReason: `file is too large for this action (${lineCount} lines, limit ${MAX_AUTONOMOUS_REFACTOR_LINES})`,
+    };
+  }
+
+  const complexityBlockReason = getSinglePassCleanupBlockReason(report, action);
+  if (complexityBlockReason) {
+    return {
+      filePath,
+      changes: [],
+      skip: true,
+      skipReason: complexityBlockReason,
     };
   }
 

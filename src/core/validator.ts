@@ -1,7 +1,9 @@
 import * as fs from 'node:fs/promises';
 import { generateCompletion } from '../utils/llm.js';
+import type { FileReport } from './analyst.js';
 import type { LargeFileAdvisory } from './largeFileAdvisor.js';
 import { MAX_AUTONOMOUS_REFACTOR_LINES } from './refactorLimits.js';
+import { getSinglePassCleanupBlockReason } from './refactorRisk.js';
 import { scoreRefactor } from './refactorScoring.js';
 
 export interface ValidatorResult {
@@ -20,6 +22,7 @@ export async function runValidator(
   filePath: string,
   changes: string[],
   action: 'humanise' | 'slim' | 'stress-test',
+  report?: FileReport,
 ): Promise<ValidatorResult> {
   // Step 1 — read the original file
   let rawSource: string;
@@ -36,6 +39,17 @@ export async function runValidator(
       status: 'skipped' as const,
       confidenceScore: 0,
       skipReason: `file is too large for this action (${lineCount} lines, limit ${MAX_AUTONOMOUS_REFACTOR_LINES})`,
+      linesChanged: 0,
+    };
+  }
+
+  const complexityBlockReason = getSinglePassCleanupBlockReason(report, action);
+  if (complexityBlockReason) {
+    return {
+      filePath,
+      status: 'skipped' as const,
+      confidenceScore: 0,
+      skipReason: complexityBlockReason,
       linesChanged: 0,
     };
   }

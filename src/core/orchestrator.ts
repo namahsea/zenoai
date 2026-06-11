@@ -464,6 +464,13 @@ function printViabilitySummary(
     }
   }
 
+  if (viability.complexityBlocked.length > 0) {
+    console.log(chalk.dim('\nNeeds split or tests first:'));
+    for (const filePath of viability.complexityBlocked) {
+      console.log(chalk.dim(`  - ${filePath}`));
+    }
+  }
+
   if (viability.weakCleanupTarget.length > 0) {
     console.log(chalk.dim('\nLow-impact cleanup targets:'));
     for (const filePath of viability.weakCleanupTarget) {
@@ -610,7 +617,7 @@ export async function runPhase2(
     }
 
     spinner.start(`Planning changes for ${basename(filePath)}...`);
-    const reviewed = await runReviewer(filePath, action);
+    const reviewed = await runReviewer(filePath, action, fileReport);
 
     if (reviewed.skip) {
       const skippedResult: ValidatorResult = {
@@ -626,7 +633,7 @@ export async function runPhase2(
     }
 
     spinner.start(`Checking ${basename(filePath)}...`);
-    const validated = await runValidator(filePath, reviewed.changes, action);
+    const validated = await runValidator(filePath, reviewed.changes, action, fileReport);
     if (validated.status === 'skipped') {
       spinner.warn(`Skipped ${basename(filePath)}: ${validated.skipReason}`);
       results.push(validated);

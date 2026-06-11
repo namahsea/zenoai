@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { basename } from 'node:path';
 import type { FileReport } from './analyst.js';
 import { MAX_AUTONOMOUS_REFACTOR_LINES } from './refactorLimits.js';
+import { getSinglePassCleanupBlockReason } from './refactorRisk.js';
 import { isHighConsequencePath } from './riskSignals.js';
 
 export type RefactorGateDecision =
@@ -153,6 +154,11 @@ export async function runRefactorGate(
       kind: 'large-file-advisory',
       reason: `file is too large for this action (${report?.lines ?? 0} lines, limit ${MAX_AUTONOMOUS_REFACTOR_LINES})`,
     };
+  }
+
+  const complexityBlockReason = getSinglePassCleanupBlockReason(report, action);
+  if (complexityBlockReason) {
+    return { kind: 'skip', reason: complexityBlockReason };
   }
 
   let source: string;
