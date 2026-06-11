@@ -19,9 +19,11 @@ import { runLargeFileAdvisor } from './largeFileAdvisor.js';
 import { runPrePlannerGate, runRefactorGate } from './refactorGate.js';
 import { confirm } from '@inquirer/prompts';
 import { runDiffer } from './differ.js';
+import { runStaticSplit } from './splitter.js';
 import type { ZenoConfig } from '../config.js';
 import type { HealthReport, RiskLevel, HealthLabel } from '../types.js';
 import { classifySelectedFiles } from './refactorViability.js';
+import { MAX_AUTONOMOUS_REFACTOR_LINES } from './refactorLimits.js';
 
 export interface RunOptions {
   role: string;
@@ -643,4 +645,60 @@ export async function runPhase2(
   await writeFile(preflight.manifestPath, JSON.stringify(manifest, null, 2));
 
   await runDiffer(results, manifest as unknown as Parameters<typeof runDiffer>[1], preflight.manifestPath);
+}
+
+export async function runSplit(
+  projectPath: string,
+  persona: string,
+): Promise<void> {
+  const spinner = ora('Analysing large files...').start();
+  const { reports } = await analyse(projectPath);
+  const candidates = reports
+    .filter(report => report.lines > MAX_AUTONOMOUS_REFACTOR_LINES)
+    .sort((a, b) => b.lines - a.lines);
+
+  spinner.succeed(`Found ${candidates.length} Split it candidate${candidates.length === 1 ? '' : 's'}`);
+
+  if (candidates.length === 0) {
+    console.log(chalk.yellow('No large files found for Split it.'));
+    console.log(chalk.dim(`Split it currently targets files over ${MAX_AUTONOMOUS_REFACTOR_LINES} lines.`));
+    process.exit(0);
+  }
+
+  const target = candidates[0];
+  console.log(chalk.cyan('\nSplit target:'));
+  console.log(chalk.white(`  ${target.path} (${target.lines} lines, ${target.functions} functions)`));
+  if (candidates.length > 1) {
+    console.log(chalk.dim(`  ${candidates.length - 1} more large file${candidates.length === 2 ? '' : 's'} can be handled in later runs.`));
+  }
+
+  console.log(chalk.dim('\nFirst Split it implementation: extract obvious top-level static constants/data into a sibling module.'));
+  console.log(chalk.dim('No model call is used for this MVP split.'));
+
+  const proceed = await confirm({ message: 'Proceed with this split?', default: true });
+  if (!proceed) {
+    console.log(chalk.yellow('Run cancelled. Your repo is unchanged.'));
+    process.exit(0);
+  }
+
+  const preflight = await runPreflight();
+  if (!preflight.passed) {
+    console.error(chalk.red('Cannot start — ' + preflight.errors.join(', ')));
+    process.exit(1);
+  }
+
+  spinner.start(`Splitting ${basename(target.path)}...`);
+  const result = await runStaticSplit(target);
+  if (result.status === 'accepted') {
+    spinner.succeed(`${basename(target.path)} — extracted static data`);
+  } else {
+    spinner.warn(`Skipped ${basename(target.path)}: ${result.skipReason}`);
+  }
+
+  const manifest = JSON.parse(await readFile(preflight.manifestPath, 'utf8')) as Record<string, unknown>;
+  manifest['action'] = 'split';
+  manifest['persona'] = persona;
+  await writeFile(preflight.manifestPath, JSON.stringify(manifest, null, 2));
+
+  await runDiffer([result], manifest as unknown as Parameters<typeof runDiffer>[1], preflight.manifestPath);
 }

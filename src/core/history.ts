@@ -15,9 +15,15 @@ export interface RefactorHistory {
       accepted: string[];
       skipped: Array<{ path: string; reason: string }>;
     };
+    split: {
+      accepted: string[];
+      skipped: Array<{ path: string; reason: string }>;
+    };
   };
   lastRunAt: string;
 }
+
+export type HistoryAction = keyof RefactorHistory['actions'];
 
 const HISTORY_FILENAME = '.zeno-history.json';
 const GITIGNORE_ENTRY = '.zeno-history.json';
@@ -28,6 +34,7 @@ function emptyHistory(): RefactorHistory {
       humanise: { accepted: [], skipped: [] },
       slim: { accepted: [], skipped: [] },
       'stress-test': { accepted: [], skipped: [] },
+      split: { accepted: [], skipped: [] },
     },
     lastRunAt: '',
   };
@@ -46,9 +53,10 @@ export async function saveHistory(
   projectRoot: string,
   acceptedFiles: string[],
   skippedFiles: Array<{ path: string; reason: string }>,
-  action: 'humanise' | 'slim' | 'stress-test',
+  action: HistoryAction,
 ): Promise<void> {
   const history = await loadHistory(projectRoot);
+  history.actions[action] ??= { accepted: [], skipped: [] };
   const bucket = history.actions[action];
 
   const acceptedRel = acceptedFiles.map(f => relative(projectRoot, f));
@@ -77,9 +85,10 @@ export async function saveHistory(
 
 export async function getRefactoredPaths(
   projectRoot: string,
-  action: 'humanise' | 'slim' | 'stress-test',
+  action: HistoryAction,
 ): Promise<Set<string>> {
   const history = await loadHistory(projectRoot);
+  history.actions[action] ??= { accepted: [], skipped: [] };
   const bucket = history.actions[action];
   return new Set([...bucket.accepted, ...bucket.skipped.map(s => s.path)]);
 }

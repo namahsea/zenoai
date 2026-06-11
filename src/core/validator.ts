@@ -9,6 +9,7 @@ export interface ValidatorResult {
   status: 'accepted' | 'skipped';
   confidenceScore: number;
   refactoredSource?: string;
+  createdFiles?: Array<{ path: string; source: string }>;
   testFile?: string;
   skipReason?: string;
   linesChanged?: number;

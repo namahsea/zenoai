@@ -1,5 +1,6 @@
 import { writeFile, readFile, unlink } from 'node:fs/promises';
 import { saveHistory } from './history.js';
+import type { HistoryAction } from './history.js';
 import { execSync } from 'node:child_process';
 import chalk from 'chalk';
 import { confirm } from '@inquirer/prompts';
@@ -94,6 +95,17 @@ export async function runDiffer(
           testFile: result.testFile,
         });
       }
+
+      for (const createdFile of result.createdFiles ?? []) {
+        await writeFile(createdFile.path, createdFile.source, FILE_ENCODING);
+        appliedFiles.push(createdFile.path);
+        manifest.files.push({
+          path: createdFile.path,
+          status: 'accepted',
+          operation: 'created',
+          confidenceScore: result.confidenceScore,
+        });
+      }
     } else {
       skippedFiles.push(result.filePath);
 
@@ -133,7 +145,7 @@ export async function runDiffer(
         process.cwd(),
         [],
         skippedEntries,
-        manifest.action as 'humanise' | 'slim' | 'stress-test',
+        manifest.action as HistoryAction,
       );
     }
 
@@ -145,11 +157,11 @@ export async function runDiffer(
 
   const acceptedPaths = results
     .filter(r => r.status === 'accepted')
-    .map(r => r.filePath);
+    .flatMap(r => [r.filePath, ...(r.createdFiles?.map(file => file.path) ?? [])]);
 
   if (acceptedPaths.length > 0) {
     execSync(`git add ${acceptedPaths.map(p => `"${p}"`).join(' ')}`);
-    execSync(`git commit -m "chore: zeno humanise — ${acceptedPaths.length} files refactored"`);
+    execSync(`git commit -m "chore: zeno ${manifest.action} — ${acceptedPaths.length} files changed"`);
   }
 
   // Save accepted and skipped files to run history
@@ -161,7 +173,7 @@ export async function runDiffer(
     process.cwd(),
     acceptedPaths,
     skippedEntries,
-    manifest.action as 'humanise' | 'slim' | 'stress-test',
+    manifest.action as HistoryAction,
   );
 
   // Step 2 — print report
@@ -178,6 +190,9 @@ export async function runDiffer(
     const score = formatConfidenceScore(result.confidenceScore);
     const lines = result.linesChanged !== undefined ? `+${result.linesChanged} lines` : '';
     console.log(`  ${chalk.cyan(result.filePath.padEnd(REPORT_PATH_COL_WIDTH))} ${chalk.green(score)}   ${chalk.dim(lines)}`);
+    for (const createdFile of result.createdFiles ?? []) {
+      console.log(`  ${chalk.cyan(createdFile.path.padEnd(REPORT_PATH_COL_WIDTH))} ${chalk.green(score)}   ${chalk.dim('created')}`);
+    }
   }
 
   console.log(chalk.bold.white(`\nSKIPPED (${skippedResults.length} files)\n`));

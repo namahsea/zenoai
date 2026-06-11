@@ -7,7 +7,7 @@ import { resolve, basename, join, sep } from 'node:path';
 import { exec } from 'node:child_process';
 import ora from 'ora';
 import { ensureConfig } from './config.js';
-import { runOrchestrator, runPhase2 } from './core/orchestrator.js';
+import { runOrchestrator, runPhase2, runSplit } from './core/orchestrator.js';
 import { loadReport } from './core/cache.js';
 import { generateHtml } from './core/htmlExporter.js';
 
@@ -21,6 +21,7 @@ const ROLES = [
 const SDE_ACTIONS = [
   'Eyeball it',
   'Humanise it',
+  'Split it',
   'Slim it down',
   'Stress test it',
 ] as const;
@@ -199,6 +200,8 @@ async function main() {
     await runOrchestrator({ role, action, config });
   } else if (action === 'Humanise it') {
     await runPhase2(process.cwd(), 'humanise', role);
+  } else if (action === 'Split it') {
+    await runSplit(process.cwd(), role);
   } else if (action === 'Slim it down') {
     await runPhase2(process.cwd(), 'slim', role);
   } else if (action === 'Stress test it') {
