@@ -430,8 +430,11 @@ function printNoStrongTargetsMessage(
     if (skippedText.includes('too large')) {
       recommendations.push('Use Split it later for large components or route modules.');
     }
-    if (skippedText.includes('framework shell') || skippedText.includes('configuration file')) {
-      recommendations.push('Framework shell and config files usually need tests or feature work, not readability cleanup.');
+    if (skippedText.includes('framework shell') || skippedText.includes('framework integration') || skippedText.includes('configuration file')) {
+      recommendations.push('Framework setup and config files usually need tests or feature work, not readability cleanup.');
+    }
+    if (skippedText.includes('presentational component')) {
+      recommendations.push('Static UI components are already simple enough; Zeno will skip them unless there is real logic to clean up.');
     }
     if (recommendations.length === 0) {
       recommendations.push('Try a different action or a narrower project directory with more local business logic.');

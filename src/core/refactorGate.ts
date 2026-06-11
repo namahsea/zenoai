@@ -93,6 +93,27 @@ function isLowComplexityFrameworkShell(
   return meaningfulLineCount(source) <= 90;
 }
 
+function isFrameworkIntegrationShell(
+  filePath: string,
+  source: string,
+  report: FileReport | undefined,
+  action: 'humanise' | 'slim' | 'stress-test',
+): boolean {
+  if (action !== 'humanise') return false;
+  if (report?.hasTest) return false;
+  const normalized = filePath.replace(/\\/g, '/');
+  if (!/^app\/routes\/app\.[tj]sx?$/.test(normalized) && !/^app\/root\.[tj]sx?$/.test(normalized)) {
+    return false;
+  }
+  if ((report?.lines ?? 0) > 220) return false;
+  if ((report?.functions ?? 0) > 4) return false;
+
+  return (
+    /@shopify\/shopify-app-remix|shopify-app-remix|AppProvider|authenticate|useLoaderData|<Outlet\b/.test(source) &&
+    !/\b(useState|useEffect|useReducer|useRef|window|document|localStorage|sessionStorage)\b/.test(source)
+  );
+}
+
 function isConfigFilePath(filePath: string): boolean {
   const normalized = filePath.replace(/\\/g, '/');
   return /(^|\/)(vite|next|remix|tailwind|eslint|postcss|tsup|webpack|rollup|playwright|vitest|jest|babel|prettier)\.config\.[cm]?[tj]sx?$/.test(normalized);
@@ -132,6 +153,23 @@ function isTrivialForAction(source: string, report: FileReport | undefined, acti
   if ((report?.functions ?? 0) > 0) return false;
   if ((report?.consoleLogs ?? 0) > 0) return false;
   return meaningfulLineCount(source) <= 25;
+}
+
+function isStaticPresentationalComponent(
+  filePath: string,
+  source: string,
+  report: FileReport | undefined,
+  action: 'humanise' | 'slim' | 'stress-test',
+): boolean {
+  if (action !== 'humanise') return false;
+  if (!filePath.endsWith('.tsx') && !filePath.endsWith('.jsx')) return false;
+  if ((report?.functions ?? 0) > 1) return false;
+  if (report?.hasReactSignals || report?.hasBrowserGlobals || report?.hasProcessEnv || report?.hasMutableExports) return false;
+  if ((report?.consoleLogs ?? 0) > 0) return false;
+  if (meaningfulLineCount(source) > 260) return false;
+  if (!/<[A-Z][A-Za-z0-9.]*\b|<[a-z][A-Za-z0-9-]*\b/.test(source)) return false;
+
+  return !/\b(const|let|var)\s+\w+\s*=|\b(if|for|while|switch|try|catch)\b|\.map\s*\(|\b(async|await|fetch)\b/.test(source);
 }
 
 function shouldRequireTestsBeforeCleanup(
@@ -191,6 +229,10 @@ export async function runRefactorGate(
     return { kind: 'skip', reason: 'low-complexity framework shell with no focused humanise target' };
   }
 
+  if (isFrameworkIntegrationShell(filePath, source, report, action)) {
+    return { kind: 'skip', reason: 'framework integration file with no focused cleanup target' };
+  }
+
   if (isLowComplexityConfigFile(filePath, report, action)) {
     return { kind: 'skip', reason: 'configuration file with no focused humanise target' };
   }
@@ -201,6 +243,10 @@ export async function runRefactorGate(
 
   if (isTrivialForAction(source, report, action)) {
     return { kind: 'skip', reason: `file is too small and has no local logic for ${action}` };
+  }
+
+  if (isStaticPresentationalComponent(filePath, source, report, action)) {
+    return { kind: 'skip', reason: 'static presentational component with no focused cleanup target' };
   }
 
   return { kind: 'refactor' };
