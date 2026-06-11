@@ -21,6 +21,7 @@ import { confirm } from '@inquirer/prompts';
 import { runDiffer } from './differ.js';
 import { runStaticSplit } from './splitter.js';
 import { runSecurityCheck } from './securityCheck.js';
+import { runProgress } from './progress.js';
 import type { ZenoConfig } from '../config.js';
 import type { HealthReport, RiskLevel, HealthLabel } from '../types.js';
 import { classifySelectedFiles } from './refactorViability.js';
@@ -186,9 +187,9 @@ export async function runOrchestrator(opts: RunOptions): Promise<void> {
 
   if (opts.action === 'Check for security risks') {
     const root = process.cwd();
-    const spinner = ora('Checking obvious security risks...').start();
+    const spinner = ora('Finding files to scan...').start();
     const { reports } = await analyse(root);
-    spinner.succeed(`Checked ${reports.length} files`);
+    spinner.succeed(`Found ${reports.length} files`);
     await runSecurityCheck(reports);
     process.exit(0);
   }
@@ -198,8 +199,16 @@ export async function runOrchestrator(opts: RunOptions): Promise<void> {
 
     const MAX_SEND = 50;
 
-    process.stdout.write(chalk.yellow('Analysing project… '));
-    const { reports: allFiles, skipped } = await analyse(root);
+    const { reports: allFiles, skipped } = await runProgress(
+      {
+        label: 'reading project',
+        total: 12,
+        minDurationMs: 1000,
+        maxDurationMs: 2200,
+        showCount: false,
+      },
+      () => analyse(root),
+    );
 
     // foundTotal counts everything before the send cap is applied
     const foundTotal = allFiles.length + skipped.length;

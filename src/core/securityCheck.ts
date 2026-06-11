@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { basename } from 'node:path';
 import type { FileReport } from './analyst.js';
 import { isHighConsequencePath } from './riskSignals.js';
+import { runProgress } from './progress.js';
 
 type SecuritySeverity = 'Critical' | 'High' | 'Medium' | 'Low';
 
@@ -259,7 +260,15 @@ async function inspectFile(report: FileReport): Promise<SecurityIssue[]> {
 
 export async function runSecurityCheck(reports: FileReport[]): Promise<void> {
   const inspectedReports = reports.slice(0, 50);
-  const issueGroups = await Promise.all(inspectedReports.map(inspectFile));
+  const issueGroups = await runProgress(
+    {
+      label: 'scanning files',
+      total: inspectedReports.length,
+      minDurationMs: 1200,
+      maxDurationMs: 5200,
+    },
+    () => Promise.all(inspectedReports.map(inspectFile)),
+  );
   const issues = issueGroups
     .flat()
     .sort((a, b) => {
