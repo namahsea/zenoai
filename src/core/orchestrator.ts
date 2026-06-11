@@ -502,7 +502,11 @@ export async function runPhase2(
 
   spinner.start('Finding files Zeno can safely change...');
   const preGate = await runPrePlannerGate(reports, action);
-  spinner.succeed(`${preGate.eligibleReports.length} files look changeable`);
+  if (preGate.eligibleReports.length === 0) {
+    spinner.succeed('0 useful cleanup targets found');
+  } else {
+    spinner.succeed(`${preGate.eligibleReports.length} file${preGate.eligibleReports.length === 1 ? '' : 's'} look changeable`);
+  }
 
   if (preGate.skippedFiles.length > 0) {
     console.log(chalk.dim(`ⓘ ${preGate.skippedFiles.length} files skipped before review.`));
