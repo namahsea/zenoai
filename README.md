@@ -112,10 +112,10 @@ Zeno works with your existing API key. Pick the provider you already have access
 
 | Provider | Model | Get a key |
 |----------|-------|-----------|
-| Anthropic | claude-haiku-4-5-20251001 | [console.anthropic.com](https://console.anthropic.com) |
+| Anthropic | claude-sonnet-4-6 | [console.anthropic.com](https://console.anthropic.com) |
 | Google AI Studio | gemini-2.5-pro | [aistudio.google.com](https://aistudio.google.com) |
-| OpenRouter | deepseek/deepseek-v3.2 | [openrouter.ai](https://openrouter.ai) |
-| OpenAI | gpt-4o | [platform.openai.com](https://platform.openai.com) |
+| OpenRouter | anthropic/claude-sonnet-4.6 | [openrouter.ai](https://openrouter.ai) |
+| OpenAI | gpt-5.5 | [platform.openai.com](https://platform.openai.com) |
 
 Your key is saved to `~/.zenoai/config.json` on first run.
 

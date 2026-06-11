@@ -2,12 +2,13 @@ import Anthropic from '@anthropic-ai/sdk';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import OpenAI from 'openai';
 import { getAiConfig } from '../config.js';
+import { ZENO_MODELS } from '../core/models.js';
 
 export async function generateCompletion(
   systemPrompt: string,
   userPrompt: string,
   maxTokens: number = 1000,
-  anthropicModel: string = 'claude-sonnet-4-6',
+  anthropicModel: string = ZENO_MODELS.anthropic,
 ): Promise<string> {
   const { provider, apiKey } = await getAiConfig();
 
@@ -27,20 +28,35 @@ export async function generateCompletion(
   if (provider === 'gemini') {
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({
-      model: 'gemini-2.5-pro',
+      model: ZENO_MODELS.gemini,
       systemInstruction: systemPrompt,
     });
     const result = await model.generateContent(userPrompt);
     return result.response.text();
   }
 
-  if (provider === 'openai' || provider === 'openrouter') {
+  if (provider === 'openai') {
+    const client = new OpenAI({ apiKey });
+    const response = await client.responses.create({
+      model: ZENO_MODELS.openai,
+      max_output_tokens: maxTokens,
+      input: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt },
+      ],
+    });
+    const text = response.output_text;
+    if (!text) throw new Error('Empty response from openai');
+    return text;
+  }
+
+  if (provider === 'openrouter') {
     const client = new OpenAI({
       apiKey,
-      baseURL: provider === 'openrouter' ? 'https://openrouter.ai/api/v1' : undefined,
+      baseURL: 'https://openrouter.ai/api/v1',
     });
     const response = await client.chat.completions.create({
-      model: provider === 'openrouter' ? 'deepseek/deepseek-v3.2' : 'gpt-4o',
+      model: ZENO_MODELS.openrouter,
       max_tokens: maxTokens,
       messages: [
         { role: 'system', content: systemPrompt },
@@ -48,7 +64,7 @@ export async function generateCompletion(
       ],
     });
     const text = response.choices[0]?.message?.content;
-    if (!text) throw new Error(`Empty response from ${provider}`);
+    if (!text) throw new Error('Empty response from openrouter');
     return text;
   }
 

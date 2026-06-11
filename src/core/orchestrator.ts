@@ -22,6 +22,7 @@ import { runDiffer } from './differ.js';
 import { runStaticSplit } from './splitter.js';
 import { runSecurityCheck } from './securityCheck.js';
 import { runProgress } from './progress.js';
+import { ZENO_MODELS } from './models.js';
 import type { ZenoConfig } from '../config.js';
 import type { HealthReport, RiskLevel, HealthLabel } from '../types.js';
 import { classifySelectedFiles } from './refactorViability.js';
@@ -82,7 +83,7 @@ async function callAI(config: ZenoConfig, userMessage: string): Promise<string> 
   if (provider === 'anthropic') {
     const client = new Anthropic({ apiKey });
     const response = await client.messages.create({
-      model: 'claude-haiku-4-5-20251001',
+      model: ZENO_MODELS.anthropic,
       max_tokens: 1500,
       system: SYSTEM_PROMPT,
       messages: [{ role: 'user', content: userMessage }],
@@ -95,7 +96,7 @@ async function callAI(config: ZenoConfig, userMessage: string): Promise<string> 
   if (provider === 'gemini') {
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({
-      model: 'gemini-2.5-pro',
+      model: ZENO_MODELS.gemini,
       systemInstruction: SYSTEM_PROMPT,
     });
     const result = await model.generateContent(userMessage);
@@ -104,15 +105,15 @@ async function callAI(config: ZenoConfig, userMessage: string): Promise<string> 
 
   if (provider === 'openai') {
     const client = new OpenAI({ apiKey });
-    const response = await client.chat.completions.create({
-      model: 'gpt-4o',
-      max_tokens: 1500,
-      messages: [
+    const response = await client.responses.create({
+      model: ZENO_MODELS.openai,
+      max_output_tokens: 1500,
+      input: [
         { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: userMessage },
       ],
     });
-    const text = response.choices[0]?.message?.content;
+    const text = response.output_text;
     if (!text) throw new Error('Empty response from OpenAI');
     return text;
   }
@@ -123,7 +124,7 @@ async function callAI(config: ZenoConfig, userMessage: string): Promise<string> 
       baseURL: 'https://openrouter.ai/api/v1',
     });
     const response = await client.chat.completions.create({
-      model: 'deepseek/deepseek-v3.2',
+      model: ZENO_MODELS.openrouter,
       max_tokens: 1500,
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
