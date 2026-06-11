@@ -1,156 +1,266 @@
 # Zenoai — Progress
 
-## v0.1.4 (2026-04-14)
+## v0.2.0 beta (2026-06-12)
 
-**Fixed symlink support** — symlinked files were silently skipped because `Dirent.isFile()` returns `false` for symlinks. Now uses `stat()` (follows symlinks) to verify file type.
+Zeno v0.2.0 has been merged to `main`, tagged as `v0.2.0`, and published to npm.
 
-**Simplified directory walking** — replaced the manual recursive async generator with Node's built-in `readdir({ withFileTypes: true, recursive: true })` (Node 18.17+). Single call, flat result, no recursive yield chain. SKIP_DIRS now checked against every segment of the relative path, so nested skip dirs (e.g. `src/dist/`) are also excluded.
+This release changes Zeno from a read-only health reporter into a small launch-safety CLI for JavaScript and TypeScript projects.
 
-**Sanity check warning** — after the analyst runs, if fewer than 3 files are found and a `package.json` exists in the cwd, prints an amber warning: `Warning: only N files found — this may be incomplete. Make sure you are running zenoai from your project root.` Does not block the run.
+Current user-facing actions:
 
----
+- **Tell me if this is safe to ship** — AI-assisted read-only ship-readiness report
+- **Check for security risks** — local static scan for obvious security risk signals
+- **Make this code easier to work with** — guarded cleanup/refactor flow for safe targets
+- **Split large files** — deterministic local split for oversized files
 
-## v0.1.3 (2026-04-14)
-
-**Improved health report output:**
-
-- Risky files rendered as a rich table via `cli-table3` — columns: file path, risk level (colour-coded), legibility score (1–10, colour-coded), consequence
-- 3 prioritised suggested actions (ranked highest-value lowest-risk first), each with an action and reason
-- "Where to start" recommendation rendered in a boxen callout (yellow border)
-- `healthLabel` added to AI response schema: Critical / Concerning / Fair / Good / Excellent, aligned to score bands
-
-**HTML export (`--export` flag):**
-
-- `zenoai --export` — loads last cached report, generates self-contained HTML, auto-opens in browser. No re-run, no API call consumed.
-- `zenoai --output path/to/file.html` — custom output path
-- Fully self-contained HTML (embedded CSS, dark theme matching terminal, `@media print` for PDF export)
-- Reports saved to `reports/zenoai-report-DD-Mon-YYYY-HHmm.html` in the project root
-
----
-
-## Phase 1: Core Scaffold + Eyeball It (Complete)
-
-**What was built:**
-
-- CLI entry point via `bin/zenoai.js` with manual `.env` loading (bypasses vestauth global npm interceptor that zeroes env vars); then dynamic-imports `dist/index.js`
-- Interactive prompts: role (SDE / EM / Architect / QA) and action (Eyeball it / Deep dive / Complexity report)
-- Static file analyst (`src/core/analyst.ts`) — walks `process.cwd()`, collects LOC, function count, import count, test file detection per `.ts/.js/.tsx/.jsx` file
-- Orchestrator (`src/core/orchestrator.ts`) — wires analyst output to AI provider, parses JSON response, prints formatted terminal report
-- Wired route: **SDE → Eyeball it** (all other role/action combos stub out)
-- Config flow (`src/config.ts`) — first-run setup, prompts for provider + API key, stores in `~/.zenoai/config.json`
-
-**Multi-provider support:**
+Current model defaults:
 
 | Provider | Model |
 |----------|-------|
-| Anthropic | `claude-haiku-4-5-20251001` |
-| Google Gemini | `gemini-2.5-pro` |
-| OpenAI | `gpt-4o` |
-| OpenRouter | `deepseek/deepseek-v3.2` |
+| Anthropic | `claude-sonnet-4-6` |
+| OpenAI | `gpt-5.5` |
+| Gemini | `gemini-2.5-pro` |
+| OpenRouter | `anthropic/claude-sonnet-4.6` |
 
-**Report output (terminal):**
+OpenAI now uses the Responses API path for `gpt-5.5`. OpenRouter remains on the OpenAI-compatible chat completions path.
 
-- Health score (1–10) with label (Critical / Concerning / Fair / Good / Excellent) and one-line context
-- Risky files table — file path, risk level (colour-coded), legibility score, consequence
-- 3 observations tied to actual filenames/patterns
-- 3 suggested actions ranked by value/risk
-- "Where to start" callout box (boxen, yellow border)
-- Colour helpers: `riskColor`, `legibilityColor`, `scoreChalk`
 
-**HTML export (`--export` flag):**
+## What changed in v0.2.0
 
-- `zenoai --export` — loads last cached report, generates self-contained HTML, opens in browser automatically. No re-run, no API call.
-- `zenoai --output path/to/file.html` — same but custom output path
-- Report saved to `reports/zenoai-report-DD-Mon-YYYY-HHmm.html` in the directory where the command is run
-- `--output` overrides the default path entirely
-- HTML is fully self-contained (embedded CSS, no external deps), dark theme matching terminal, with `@media print` styles for clean PDF export via browser print
-- Auto-open: uses `child_process.exec` with platform detection (`open` / `start` / `xdg-open`)
+**Outcome-based CLI**
 
-**Report caching:**
+- Removed the old role-first UX from the active product flow
+- Replaced it with action-based prompts that match user intent
+- Kept report attribution through `Reviewed by` labels instead of making the user think in internal personas
 
-- Every successful run saves `~/.zenoai/last-report.json` (report + root path + file count + timestamp)
-- `--export` reads from cache — instant, no API call consumed
-- If no cache exists, prints: `No report found. Run zenoai first to generate a report.`
+**Ship-readiness report**
 
-**Shared types (`src/types.ts`):**
+- New primary read-only action: `Tell me if this is safe to ship`
+- Output answers the launch question directly:
+  - `Safe to ship`
+  - `Ship with caution`
+  - `Not yet`
+  - `Do not ship`
+- Includes why, top blockers, and the safest next step
+- Shows AI review transparency before paid model calls:
+  - provider
+  - model
+  - call count
 
-- `HealthReport`, `RiskyFile`, `SuggestedAction`, `RiskLevel`, `HealthLabel` — shared across orchestrator, htmlExporter, cache
+**Security check**
 
-**Known quirks:**
+- New local static security scan
+- No model call, no branch, no file writes
+- Checks obvious risk signals:
+  - exposed secrets
+  - auth/webhook/payment/cart/order/billing routes
+  - missing visible tests around high-impact routes
+  - unsafe redirects
+  - permissive CORS
+  - raw HTML rendering
+  - dynamic code execution
+  - weak crypto
+  - disabled TLS verification
+  - risky file/database access
+  - client/server boundary leaks
+- Report clearly says `Scan type: Local static scan`
+- Notes that this is not a full security audit
+- Progress bar is used only here and clears before the final report
 
-- vestauth (global npm hook) intercepts dotenv and zeroes env vars — solved by loading `.env` with raw `fs.readFileSync` in `bin/zenoai.js` before any module runs
-- Run with: `node bin/zenoai.js` from any JS/TS project root; or `npm link` to use `zenoai` globally
+**Safe cleanup flow**
 
----
+- `Make this code easier to work with` now refuses low-value or unsafe targets before spending model calls
+- Added local gates for:
+  - generated files
+  - config files
+  - framework shells
+  - server integration files
+  - static presentational UI
+  - high-consequence untested routes
+  - complex 301-500 line files
+- Raised the autonomous single-file limit from 300 to 500 lines with additional complexity checks
+- Added a pre-run viability check so Zeno does not ask for paid model approval when it already knows no useful target exists
 
-## Phase 2: Current state
+**Refactor quality**
 
-The core Phase 2 pipeline works end to end:
+Pipeline is now:
 
 `Preflight -> Analyst -> Planner -> Reviewer -> Validator -> Critic -> Differ -> Approval`
 
-It has been tested on real projects and can produce reviewable human-style diffs on a dedicated `zeno/refactor-...` branch.
+The Critic pass checks:
 
-**Implemented since Phase 1:**
+- helper purity and hidden dependencies
+- duplicated caller/callee boundary work
+- behavior parity around identity, mutation timing, memoization, and lifecycle assumptions
 
-- SDE actions wired: **Humanise it**, **Slim it down**, **Stress test it**
-- EM actions wired back to the read-only health report path: **How bad is it**, **Triage it**
-- Recursive branch guard blocks running a new refactor from inside an existing `zeno/` branch
-- Dirty tree prompt offers to commit before starting a Zeno run
-- Rollback uses `git reset --hard HEAD` before switching branches to avoid leaked files
-- Git submodule detection excludes files inside submodules from analysis
-- Shared provider-agnostic LLM client for Phase 2
-- API key loaded from `~/.zenoai/config.json`
-- Reviewer and Validator skip autonomous whole-file refactors over 300 lines
-- Shared `extractJson` helper for model JSON responses
-- Skipped files are saved to `.zeno-history.json`, including zero-accepted runs
-- Post-refactor Critic pass audits extracted helper boundaries before files are written
+**Split large files**
 
-**Current Phase 2 safety shape:**
+- New `Split large files` action
+- Current implementation is deterministic and local
+- Starts with the safest split: moving obvious top-level static constants/data into a sibling module
+- Validates generated split output before accepting it
+- No model call is used for this first-pass split
 
-- File-writing actions require git preflight
-- Zeno creates a `zeno/refactor-...` branch before applying accepted changes
-- Planner selects up to 5 files from up to 20 candidates
-- Files with too many importers, test/spec paths, declaration files, direct cycles, or prior history are skipped
-- Reviewer produces conservative change instructions
-- Validator rewrites only accepted files and applies local confidence checks
-- Critic reviews helper purity, duplicate caller/callee setup, and behavior parity
-- Differ writes accepted files, commits them, prints an accepted/skipped report, and asks before merge
+**Docs and repository cleanup**
 
-**Still needed before shipping 0.2.0:**
+- README updated for current product flow
+- Old role/action diagram removed from README usage
+- Badges cleaned up
+- `master` branch deleted from GitHub
+- `testing-issue-fix` branch deleted after merge
+- `main` is the canonical branch
 
-- Test Phase 2 on one more real messy project
-- Improve large-file handling without raising the autonomous rewrite limit
-- Bump version to `0.2.0`
-- Publish to npm
-- Document Phase 2 user-facing behavior
 
----
+## Validation done
 
-## Billing and cost display note
+Tested on real projects:
 
-During local testing, Zeno may show a rough provider cost estimate so the tester can understand real API spend while validating the product.
+- Shopify/Remix app
+- large visual landing-page style app
+- Zeno itself
 
-This is a temporary testing affordance, not the intended production UX.
+Smoke-tested provider paths:
 
-**Current testing behavior:**
+- Anthropic direct
+- OpenRouter
+- OpenAI
+- Gemini
 
-- Show a max estimated provider cost before Phase 2 runs
-- Label it as a maximum estimate because local skips and safety skips can reduce actual calls
-- Keep it visible while the founder/tester is paying provider bills directly
+Release verification:
 
-**Production direction:**
+- `npm run build` passes
+- package version bumped to `0.2.0`
+- git tag `v0.2.0` pushed
+- npm publish completed
 
-- Remove raw provider-dollar cost from the CLI before public launch
-- Do not position Zeno as a metered API wrapper
-- Introduce Zeno-owned auth and billing before hosted/production usage
-- Prefer a credit-based model, possibly subscription plus included credits and top-ups
-- Expose user-facing usage as Zeno credits, not OpenAI/Anthropic/Gemini provider cost
 
-**Likely pricing shape:**
+## Self-scan finding
 
-- Free tier: limited health reports and possibly one small refactor run
-- Pro tier: monthly subscription with included Zeno credits
-- Credit packs: pay-as-you-go top-ups for heavier usage
+After release, Zeno was run against the Zeno codebase itself.
 
-Raw provider costs should remain internal analytics once billing exists.
+Result:
+
+`Do not ship [Critical risk]`
+
+The report correctly identified the main product risk:
+
+- zero automated test coverage
+- `src/core/orchestrator.ts` is large and central
+- `src/core/securityCheck.ts` is important but untested
+- `src/core/differ.ts` is important but untested
+
+This does not invalidate the beta release, but it is the clearest next engineering priority.
+
+Zeno is now useful as a beta, but it is not yet a stable 1.0 product.
+
+
+## Next priorities
+
+### 1. Add test coverage around core safety logic
+
+Start with deterministic/local modules:
+
+- `src/core/securityCheck.ts`
+- `src/core/refactorGate.ts`
+- `src/core/refactorViability.ts`
+- `src/core/refactorScoring.ts`
+- `src/core/differ.ts`
+- `src/core/splitter.ts`
+
+Goal:
+
+- catch false positives/false negatives
+- protect the product's safety claims
+- make future refactors less risky
+
+### 2. Break down `orchestrator.ts`
+
+`orchestrator.ts` currently coordinates too much:
+
+- read-only report flow
+- security flow routing
+- Phase 2 refactor flow
+- split flow
+- terminal report printing
+- AI call handling
+
+Suggested direction:
+
+- `shipReadiness.ts`
+- `refactorFlow.ts`
+- `splitFlow.ts`
+- `reportPrinters.ts`
+- `aiReview.ts`
+
+Keep behavior stable while extracting.
+
+### 3. Test runner wiring
+
+Zeno should detect and run project tests after accepted refactors.
+
+Targets:
+
+- Jest
+- Vitest
+- Mocha
+- npm test fallback
+
+This should become the main confidence signal for accepted refactors.
+
+### 4. Smarter split large files
+
+Current split only extracts static data.
+
+Next version should support:
+
+- component extraction
+- hook extraction
+- pure helper extraction
+- server/action helper extraction
+- import path validation
+- TypeScript parse validation
+
+### 5. Model evaluation harness
+
+Create a small Zeno benchmark for model defaults:
+
+- ship-readiness JSON validity
+- risk ranking accuracy
+- skip correctness
+- refactor restraint
+- boundary quality
+- behavior preservation
+- cost/speed
+
+This is especially important before adding cheaper OpenRouter/Kimi-style modes.
+
+
+## Historical notes
+
+### v0.1.7
+
+- Structured JSON report schema
+- Consequence-based risk anchors
+- Directory guards
+- Prompt clarifications
+- Markdown fence stripping before JSON parse
+- Post-analysis guards for zero files, generated-only results, unreadable files, and large codebases
+
+### v0.1.6
+
+- Recursive directory walking fixed
+- `.d.ts` / `.d.tsx` files excluded as auto-generated
+- Added export/log metadata signals
+- Smart prioritisation by `lineCount x functionCount`
+- Single `MAX_SEND = 50` cap
+- Transparency log for skipped files
+
+### v0.1.3
+
+- Risk table with legibility scores
+- Suggested actions
+- HTML export
+
+### v0.1.0
+
+- First public read-only codebase health report
