@@ -11,36 +11,37 @@
   <a href="https://twitter.com/zeno_cli"><img src="https://img.shields.io/badge/Twitter-%40zeno__cli-1DA1F2?logo=twitter&logoColor=white" alt="Twitter"/></a>
 </p>
 
-**Zeno** is an AI-powered CLI tool that analyses your JavaScript or TypeScript project and tells you exactly what is messy, what is risky, and where to start.
+**Zeno** is an AI-powered CLI tool that analyses your JavaScript or TypeScript project and tells you exactly what is messy, what is risky, what is safe to change, and where to start.
 
 ⚡ **One command.** No setup. No hand-holding.
 
-🔍 **Silent run.** Zeno reads your codebase autonomously and returns a plain-English health report in under 2 minutes.
+🔍 **Plain-English review.** Zeno reads your codebase and returns a practical terminal report.
 
-🔒 **Your key stays local.** API keys are stored only on your machine — never sent to our servers.
+🛡️ **Safety first.** If Zeno cannot find a safe cleanup target, it refuses instead of forcing a risky change.
+
+🔒 **Your key stays local.** API keys are stored only on your machine.
 
 ## 📰 News
 
+- **0.2.0 candidate** 🚀 Outcome-based actions, ship-readiness review, local security scan, safe cleanup gating, large-file splitting
 - **2026-04-17** 🚀 Released v0.1.7 — structured JSON report schema, consequence-based risk anchors, directory guards, prompt clarifications
 - **2026-04-14** 🚀 Released v0.1.6 — smart file prioritisation, richer metadata signals, single send cap
-- **2026-04-14** 🚀 Released v0.1.5 — fix recursive directory walking using readdirSync with isFile()
-- **2026-04-14** 🚀 Released v0.1.4 — recursive file walking fix, symlink support, low-file-count warning
 - **2026-04-14** 🚀 Released v0.1.3 — risk table with legibility scores, suggested actions, HTML export
-- **2026-04-13** 🚀 Released v0.1.2 — ASCII banner, human-readable errors
-- **2026-04-13** 🚀 Released v0.1.1 — multi-provider support (Anthropic, Gemini, OpenRouter, OpenAI)
-- **2026-04-12** 🎉 Released v0.1.0 — first public release, SDE persona, Eyeball it action
+- **2026-04-12** 🎉 Released v0.1.0 — first public release
 
 ## ✨ Key Features
 
-🧠 **Persona-driven** — Choose the SDE lens for code quality and complexity analysis
+🚢 **Ship-readiness review** — Ask Zeno whether the code is safe to ship and get a clear verdict.
 
-⚡ **Lightning fast** — Static analysis runs locally, one AI call returns the full report
+🔐 **Security risk check** — Run a local static scan for obvious security risk signals before launch.
 
-🔌 **Model agnostic** — Works with Anthropic, Gemini, OpenRouter, or OpenAI
+🧹 **Safe cleanup** — Zeno cleans up files only when the change is low-risk and useful.
 
-🔒 **Privacy first** — Your code never leaves your machine. Only a compact structural summary is sent to the AI
+✂️ **Large-file splitting** — Zeno can split oversized files by extracting obvious static data into a sibling module.
 
-🛠️ **Zero config** — No config files, no IDE plugins, no setup. Just `npx zenoai`
+🔌 **Model agnostic** — Works with Anthropic, Gemini, OpenRouter, or OpenAI.
+
+🛠️ **Zero config** — No config files, no IDE plugins, no setup. Just `npx zenoai`.
 
 ## 🚀 Quick Start
 
@@ -48,33 +49,57 @@
 npx zenoai
 ```
 
-No global install needed. Just run it inside any JS/TS project.
+No global install needed. Run it inside any JS/TS project.
 
-## 🔄 How it works
+## 🔄 How It Works
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/namahsea/zenoai/master/assets/Zeno-analysis-1.png" alt="How Zeno works" width="700"/>
-</p>
-
-## 📊 Sample output
-
-```
-━━━  ZENO — CODEBASE HEALTH REPORT  ━━━
-
-Health Score: 4/10
-
-Top risky files:
-  src/auth/index.ts      — handles auth, DB calls, and session logic in one file
-  src/api/routes.ts      — 14 functions, no test file, high coupling
-  src/utils/helpers.ts   — 312 lines, mixed concerns, imported everywhere
-
-Observations:
-  1. Auth and database logic are tangled — high risk if either changes
-  2. 60% of your files have no test coverage
-  3. Your utility layer is doing too much
+```text
+1. Run `npx zenoai`
+2. Pick what you want Zeno to do
+3. Zeno scans your JavaScript and TypeScript files locally
+4. Zeno chooses the safest path:
+   - read-only report
+   - local security scan
+   - guarded cleanup
+   - large-file split
+5. Zeno prints a terminal report
+6. If files change, Zeno stages them on a zeno branch for review
 ```
 
-## 🔌 Supported AI providers
+## 📊 Sample Output
+
+```text
+━━━  ZENOAI — SHIP READINESS REPORT  ━━━
+Project     : my-app
+Reviewed by : Engineering Manager
+Files       : 24
+
+Is this code safe to ship?
+Not yet  [High risk]
+
+Why
+  The highest-risk routes touch auth, data writes, or external APIs without visible safety tests.
+
+What is blocking shipment
+  1. src/server/auth.ts High
+     Session logic is hard to verify and has no nearby test coverage.
+  2. src/api/webhooks.ts High
+     Webhook behavior can affect production data if verification breaks.
+
+Safest next step
+  Add tests around the highest-risk route before refactoring or shipping new behavior.
+```
+
+## 🧭 Available Actions
+
+| Action | What it does |
+|--------|--------------|
+| Tell me if this is safe to ship | Read-only AI-assisted codebase risk report |
+| Check for security risks | Local static scan for obvious security signals |
+| Make this code easier to work with | Guarded refactor flow for safe cleanup targets |
+| Split large files | Local deterministic split for oversized files |
+
+## 🔌 Supported AI Providers
 
 Zeno works with your existing API key. Pick the provider you already have access to:
 
@@ -85,7 +110,15 @@ Zeno works with your existing API key. Pick the provider you already have access
 | OpenRouter | deepseek/deepseek-v3.2 | [openrouter.ai](https://openrouter.ai) |
 | OpenAI | gpt-4o | [platform.openai.com](https://platform.openai.com) |
 
-Your key is saved to `~/.zenoai/config.json` on first run. It never leaves your machine.
+Your key is saved to `~/.zenoai/config.json` on first run.
+
+## 🔒 Privacy
+
+- Zeno scans your project locally before choosing what to do.
+- Security checks and first-pass large-file splits are local static operations.
+- Read-only reports send a compact structural summary to your selected AI provider.
+- Refactor actions may send selected file content to your selected AI provider so Zeno can propose changes.
+- API keys are stored only in `~/.zenoai/config.json`.
 
 ## 📋 Requirements
 
@@ -93,7 +126,7 @@ Your key is saved to `~/.zenoai/config.json` on first run. It never leaves your 
 - A JavaScript or TypeScript project
 - An API key from any supported provider
 
-## 🔁 Reset your API key
+## 🔁 Reset Your API Key
 
 ```bash
 rm ~/.zenoai/config.json
@@ -102,30 +135,43 @@ npx zenoai
 
 ## 🗺️ Roadmap
 
-| Phase | Status | Description |
-|-------|--------|-------------|
-| Phase 1 — Eyeball it | ✅ Live | Read-only codebase health report |
-| Phase 2 — Fix it | 🧪 In testing | Guarded autonomous refactoring with git safety and review approval |
-| Phase 3 — Scale it | 🔜 Planned | No API key needed, Zeno handles everything |
+| Area | Status | Description |
+|------|--------|-------------|
+| Ship-readiness review | ✅ Live | Read-only risk report with a clear ship/no-ship answer |
+| Security check | ✅ Live | Local static scan for obvious security risk signals |
+| Safe cleanup | ✅ Live | Guarded refactoring with validation and final boundary review |
+| Large-file splitting | ✅ Live | Static extraction for oversized files |
+| Test runner wiring | 🔜 Planned | Detect Jest/Vitest/Mocha and run generated tests |
+| Smarter splitting | 🔜 Planned | Decompose large files into components, hooks, and modules |
+| Hosted access | 🔜 Planned | Use Zeno without bringing your own API key |
 
 ## 📦 Changelog
 
+### 0.2.0 candidate
+- Outcome-based action menu
+- Ship-readiness report
+- Local static security check
+- Guarded cleanup with pre-run viability checks
+- Large-file splitting for static data extraction
+- Post-refactor Critic pass after Validator
+- Local gates for generated files, config files, framework shells, static UI, and high-consequence untested routes
+- Cleaner terminal progress and report output
+
 ### v0.1.7
-- Structured JSON report schema — renamed fields (`score`, `label`, `summary`, `files`, `actions`, `start`) for consistency
-- Consequence-based risk anchors in system prompt — Critical reflects production impact (auth, payments, data writes), not line count
-- "Where to start" anchored to highest-consequence action — never recommends logging cleanup over untested critical business logic
-- Markdown fence stripping before JSON parse — handles models that wrap responses in code blocks
-- Directory guards — blocks dangerous paths (home, `/`, `/usr`, `/etc`, `/var`, `/tmp`), warns on missing `package.json`
-- Post-analysis guards — exits on zero files, auto-generated-only results, or majority unreadable files; warns on large codebases (>100 files)
+- Structured JSON report schema
+- Consequence-based risk anchors in system prompt
+- "Where to start" anchored to highest-consequence action
+- Markdown fence stripping before JSON parse
+- Directory guards for unsafe working directories
+- Post-analysis guards for zero files, generated-only results, unreadable files, and large codebases
 
 ### v0.1.6
-- Recursive directory walking fixed — no more missed nested files
+- Recursive directory walking fixed
 - `.d.ts` / `.d.tsx` files excluded as auto-generated
 - Two new metadata signals — `exportCount` and `hasConsoleLog`
-- 300-line cap removed — line count is now a risk signal, not a gate
-- Smart prioritisation — files sorted by `lineCount × functionCount` before capping
-- Single `MAX_SEND = 50` cap in `orchestrator.ts` — one source of truth
-- Full transparency log — every skipped file shown with reason
+- Smart prioritisation by `lineCount x functionCount`
+- Single `MAX_SEND = 50` cap
+- Full transparency log for skipped files
 
 ---
 
