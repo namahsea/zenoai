@@ -20,6 +20,7 @@ import { runPrePlannerGate, runRefactorGate } from './refactorGate.js';
 import { confirm } from '@inquirer/prompts';
 import { runDiffer } from './differ.js';
 import { runStaticSplit } from './splitter.js';
+import { runSecurityCheck } from './securityCheck.js';
 import type { ZenoConfig } from '../config.js';
 import type { HealthReport, RiskLevel, HealthLabel } from '../types.js';
 import { classifySelectedFiles } from './refactorViability.js';
@@ -162,13 +163,35 @@ function actionSlug(action: string): string {
 function isReadOnlyReportAction(role: string, action: string): boolean {
   return (
     (role === 'Senior Developer' && action === 'Eyeball it') ||
-    (role === 'EM' && (action === 'How bad is it' || action === 'Triage it'))
+    (role === 'EM' && (action === 'How bad is it' || action === 'Triage it')) ||
+    (role === 'Engineering Manager' && action === 'Tell me if this is safe to ship') ||
+    (role === 'Security Reviewer' && action === 'Check for security risks')
   );
+}
+
+function isShipReadinessAction(action: string): boolean {
+  return action === 'Tell me if this is safe to ship';
+}
+
+function shipAnswer(report: HealthReport): { answer: string; risk: string; color: (text: string) => string } {
+  if (report.score >= 8) return { answer: 'Safe to ship', risk: 'Low risk', color: chalk.green };
+  if (report.score >= 6) return { answer: 'Ship with caution', risk: 'Medium risk', color: chalk.yellow };
+  if (report.score >= 4) return { answer: 'Not yet', risk: 'High risk', color: chalk.hex('#EF9F27') };
+  return { answer: 'Do not ship', risk: 'Critical risk', color: chalk.red };
 }
 
 export async function runOrchestrator(opts: RunOptions): Promise<void> {
   const normalizedAction = actionSlug(opts.action);
-  console.log(chalk.dim(`role: ${opts.role}  |  action: ${normalizedAction}\n`));
+  console.log(chalk.dim(`action: ${normalizedAction}\n`));
+
+  if (opts.action === 'Check for security risks') {
+    const root = process.cwd();
+    const spinner = ora('Checking obvious security risks...').start();
+    const { reports } = await analyse(root);
+    spinner.succeed(`Checked ${reports.length} files`);
+    await runSecurityCheck(reports);
+    process.exit(0);
+  }
 
   if (isReadOnlyReportAction(opts.role, opts.action)) {
     const root = process.cwd();
@@ -311,7 +334,11 @@ export async function runOrchestrator(opts: RunOptions): Promise<void> {
       process.exit(1);
     }
 
-    printReport(report, root, files.length, normalizedAction);
+    if (isShipReadinessAction(opts.action)) {
+      printShipReadinessReport(report, root, files.length);
+    } else {
+      printReport(report, root, files.length, normalizedAction);
+    }
     await saveReport(report, root, files.length);
 
     process.exit(0);
@@ -399,6 +426,43 @@ function printReport(report: HealthReport, root: string, fileCount: number, acti
     });
     console.log(box);
     console.log('');
+  }
+
+  console.log(chalk.bold.white('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
+}
+
+function printShipReadinessReport(report: HealthReport, root: string, fileCount: number): void {
+  const now = new Date();
+  const date = now.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+  const time = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
+  const datetime = `${date}, ${time}`;
+  const verdict = shipAnswer(report);
+
+  console.log(chalk.bold.white('━━━  ZENOAI — SHIP READINESS REPORT  ━━━'));
+  console.log(chalk.dim(`Project     : ${basename(root)}`));
+  console.log(chalk.dim('Reviewed by : Engineering Manager'));
+  console.log(chalk.dim(`Files       : ${fileCount}`));
+  console.log(chalk.dim(`Date        : ${datetime}\n`));
+
+  console.log(chalk.dim('Is this code safe to ship?'));
+  console.log(`${chalk.bold(verdict.color(verdict.answer))}  ${verdict.color(`[${verdict.risk}]`)}`);
+  console.log('');
+
+  console.log(chalk.bold('Why'));
+  console.log(`  ${chalk.dim(report.summary)}\n`);
+
+  if (report.files && report.files.length > 0) {
+    console.log(chalk.bold('What is blocking shipment'));
+    report.files.slice(0, 3).forEach((file, index) => {
+      console.log(`  ${chalk.white.bold(`${index + 1}.`)} ${chalk.cyan(file.path)} ${riskColor(file.risk)}`);
+      console.log(`     ${chalk.dim(file.consequence)}`);
+    });
+    console.log('');
+  }
+
+  if (report.start) {
+    console.log(chalk.bold('Safest next step'));
+    console.log(`  ${report.start}\n`);
   }
 
   console.log(chalk.bold.white('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));

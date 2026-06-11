@@ -13,22 +13,23 @@ import { generateHtml } from './core/htmlExporter.js';
 
 const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
 
-const ROLES = [
-  'Senior Developer',
-  'EM',
-] as const;
-
-const SDE_ACTIONS = [
-  'Eyeball it',
-  'Humanise it',
-  'Split it',
-  'Slim it down',
-  'Stress test it',
-] as const;
-
-const EM_ACTIONS = [
-  'How bad is it',
-  'Triage it',
+const ZENO_ACTIONS = [
+  {
+    value: 'Tell me if this is safe to ship',
+    description: 'Read-only report on risk, maintainability, and where to start.',
+  },
+  {
+    value: 'Make this code easier to work with',
+    description: 'Cleans safe files, or recommends a split/test first.',
+  },
+  {
+    value: 'Split large files',
+    description: 'Makes oversized files smaller without changing behavior.',
+  },
+  {
+    value: 'Check for security risks',
+    description: 'Finds obvious security risks before launch.',
+  },
 ] as const;
 
 type GuardResult =
@@ -175,37 +176,24 @@ async function main() {
   const config = await ensureConfig();
 
   const projectName = basename(process.cwd());
-  const role = await select({
-    message: `Who do you want to review ${projectName}?`,
-    choices: ROLES.map((r) => ({ value: r })),
-    default: 'Senior Developer',
+  const action = await select({
+    message: `What do you want Zeno to do for ${projectName}?`,
+    choices: ZENO_ACTIONS.map((a) => ({
+      value: a.value,
+      description: a.description,
+    })),
   });
-
-  let action: string;
-  if (role === 'Senior Developer') {
-    action = await select({
-      message: 'What do you want?',
-      choices: SDE_ACTIONS.map((a) => ({ value: a })),
-    });
-  } else {
-    action = await select({
-      message: 'What do you want?',
-      choices: EM_ACTIONS.map((a) => ({ value: a })),
-    });
-  }
 
   console.log('');
 
-  if (action === 'Eyeball it' || action === 'How bad is it' || action === 'Triage it') {
-    await runOrchestrator({ role, action, config });
-  } else if (action === 'Humanise it') {
-    await runPhase2(process.cwd(), 'humanise', role);
-  } else if (action === 'Split it') {
-    await runSplit(process.cwd(), role);
-  } else if (action === 'Slim it down') {
-    await runPhase2(process.cwd(), 'slim', role);
-  } else if (action === 'Stress test it') {
-    await runPhase2(process.cwd(), 'stress-test', role);
+  if (action === 'Tell me if this is safe to ship') {
+    await runOrchestrator({ role: 'Engineering Manager', action, config });
+  } else if (action === 'Make this code easier to work with') {
+    await runPhase2(process.cwd(), 'humanise', 'Senior Engineer');
+  } else if (action === 'Split large files') {
+    await runSplit(process.cwd(), 'Senior Engineer');
+  } else if (action === 'Check for security risks') {
+    await runOrchestrator({ role: 'Security Reviewer', action, config });
   }
 }
 
