@@ -21,6 +21,7 @@ import { confirm } from '@inquirer/prompts';
 import { runDiffer } from './differ.js';
 import type { ZenoConfig } from '../config.js';
 import type { HealthReport, RiskLevel, HealthLabel } from '../types.js';
+import { classifySelectedFiles } from './refactorViability.js';
 
 export interface RunOptions {
   role: string;
@@ -439,6 +440,31 @@ function printNoStrongTargetsMessage(
   console.log(chalk.dim('No useful test targets were found after local safety filters. Try a different project area or reset .zeno-history.json.'));
 }
 
+function printViabilitySummary(
+  viability: ReturnType<typeof classifySelectedFiles>,
+): void {
+  if (viability.advisoryOnly.length > 0) {
+    console.log(chalk.dim('\nSplit it candidates:'));
+    for (const filePath of viability.advisoryOnly) {
+      console.log(chalk.dim(`  - ${filePath}`));
+    }
+  }
+
+  if (viability.riskyUntestedVisual.length > 0) {
+    console.log(chalk.dim('\nNeeds tests first:'));
+    for (const filePath of viability.riskyUntestedVisual) {
+      console.log(chalk.dim(`  - ${filePath}`));
+    }
+  }
+
+  if (viability.weakCleanupTarget.length > 0) {
+    console.log(chalk.dim('\nWeak Humanise targets:'));
+    for (const filePath of viability.weakCleanupTarget) {
+      console.log(chalk.dim(`  - ${filePath}`));
+    }
+  }
+}
+
 export async function runPhase2(
   projectPath: string,
   action: 'humanise' | 'slim' | 'stress-test',
@@ -474,6 +500,7 @@ export async function runPhase2(
 
   if (preGate.eligibleReports.length === 0) {
     printNoStrongTargetsMessage(action, preGate.skippedFiles);
+    await rollback(preflight.manifestPath);
     process.exit(0);
   }
 
@@ -484,7 +511,33 @@ export async function runPhase2(
 
   if (plan.selectedFiles.length === 0) {
     printNoStrongTargetsMessage(action, preGate.skippedFiles);
+    await rollback(preflight.manifestPath);
     process.exit(0);
+  }
+
+  const viability = classifySelectedFiles(plan.selectedFiles, reportByPath);
+  if (action === 'humanise' && viability.refactorable.length === 0) {
+    console.log(chalk.yellow('No safe Humanise targets found before paid model calls.'));
+    printViabilitySummary(viability);
+    console.log(chalk.dim('\nRecommended next action: run Split it for large components, or Stress test it for risky untested components.'));
+    await rollback(preflight.manifestPath);
+    process.exit(0);
+  }
+
+  if (action === 'humanise' && viability.refactorable.length === 1 && plan.selectedFiles.length > 3) {
+    console.log(chalk.yellow(`Only 1 safe Humanise target found out of ${plan.selectedFiles.length} selected files.`));
+    printViabilitySummary(viability);
+    const continueWithSingleTarget = await confirm({
+      message: `Continue with ${viability.refactorable[0]} only?`,
+      default: false,
+    });
+    if (!continueWithSingleTarget) {
+      console.log(chalk.yellow('\nRun cancelled. Cleaning up...'));
+      await rollback(preflight.manifestPath);
+      console.log(chalk.yellow('Branch removed. Your repo is unchanged.'));
+      process.exit(0);
+    }
+    plan.selectedFiles = viability.refactorable;
   }
 
   const { loadHistory } = await import('./history.js');
