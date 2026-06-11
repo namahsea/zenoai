@@ -7,6 +7,7 @@ import type { ValidatorResult } from './validator.js';
 const MAX_EXTRACTED_STATEMENTS = 14;
 const MAX_EXTRACTED_LINES = 220;
 const MIN_EXTRACTED_LINES = 20;
+const MAX_SINGLE_LINE_IMPORT_LENGTH = 100;
 
 interface ExtractableStatement {
   names: string[];
@@ -186,6 +187,20 @@ function buildImportSpecifier(fromFilePath: string, toFilePath: string): string 
   return specifier;
 }
 
+function formatNamedImport(names: string[], moduleSpecifier: string): string {
+  const singleLineImport = `import { ${names.join(', ')} } from '${moduleSpecifier}';`;
+  if (singleLineImport.length <= MAX_SINGLE_LINE_IMPORT_LENGTH) {
+    return `${singleLineImport}\n`;
+  }
+
+  return [
+    'import {',
+    ...names.map(name => `  ${name},`),
+    `} from '${moduleSpecifier}';`,
+    '',
+  ].join('\n');
+}
+
 function addExport(statementText: string): string {
   return statementText.replace(/^(\s*)const\b/m, '$1export const');
 }
@@ -271,7 +286,7 @@ export async function runStaticSplit(fileReport: FileReport): Promise<ValidatorR
   const splitFilePath = buildSplitFilePath(fileReport.path);
   const importSpecifier = buildImportSpecifier(fileReport.path, splitFilePath);
   const importedNames = selectedStatements.flatMap(statement => statement.names);
-  const importLine = `import { ${importedNames.join(', ')} } from '${importSpecifier}';\n`;
+  const importLine = formatNamedImport(importedNames, importSpecifier);
 
   let updatedSource = source;
   for (const statement of [...selectedStatements].sort((a, b) => b.start - a.start)) {
