@@ -66,6 +66,46 @@ function hasOpenRedirectSignal(source: string): boolean {
   return /\bredirect\s*\([^)]*(request|url|searchParams|params)\b/i.test(source);
 }
 
+function hasPermissiveCors(source: string): boolean {
+  return /Access-Control-Allow-Origin['"]?\s*[,=:]\s*['"]\*['"]|origin\s*:\s*(?:true|['"]\*['"])/i.test(source);
+}
+
+function hasDisabledTlsVerification(source: string): boolean {
+  return /NODE_TLS_REJECT_UNAUTHORIZED\s*=\s*['"]0['"]|rejectUnauthorized\s*:\s*false/i.test(source);
+}
+
+function hasWeakCrypto(source: string): boolean {
+  return /\b(md5|sha1)\b|createHash\s*\(\s*['"](?:md5|sha1)['"]\s*\)/i.test(source);
+}
+
+function hasCommandExecution(source: string): boolean {
+  return /\b(?:exec|execSync|spawn|spawnSync)\s*\(|from\s+['"]node:child_process['"]|from\s+['"]child_process['"]/i.test(source);
+}
+
+function hasUnsafeDatabaseQuery(source: string): boolean {
+  return /\$(?:queryRawUnsafe|executeRawUnsafe)\b|\b(?:query|execute)\s*\(\s*`[\s\S]*?\$\{/i.test(source);
+}
+
+function hasRiskyFileAccess(source: string): boolean {
+  const fileAccessPattern = /\b(?:readFile|writeFile|appendFile|unlink|rm|rename|createReadStream|createWriteStream)\s*\(([\s\S]{0,180})\)/gi;
+  for (const match of source.matchAll(fileAccessPattern)) {
+    if (/\b(?:req|request|params|searchParams|body|formData|url|pathname|input|userInput)\b/i.test(match[1] ?? '')) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isClientComponent(source: string): boolean {
+  const firstLines = source.split('\n').slice(0, 8).join('\n');
+  return /['"]use client['"]/.test(firstLines);
+}
+
+function hasServerOnlyClientLeak(source: string): boolean {
+  if (!isClientComponent(source)) return false;
+  return /from\s+['"][^'"]*(?:\.server|server-only|node:fs|fs|node:child_process|child_process)[^'"]*['"]|\bprocess\.env\b/i.test(source);
+}
+
 async function inspectFile(report: FileReport): Promise<SecurityIssue[]> {
   let source: string;
   try {
@@ -144,6 +184,76 @@ async function inspectFile(report: FileReport): Promise<SecurityIssue[]> {
     });
   }
 
+  if (hasPermissiveCors(source)) {
+    issues.push({
+      filePath: report.path,
+      severity: 'Medium',
+      concern: 'CORS appears to allow broad cross-origin access.',
+      detail: 'Permissive CORS can expose API responses to websites you do not control.',
+      nextStep: 'Restrict CORS to known production origins and keep credentials handling explicit.',
+    });
+  }
+
+  if (hasDisabledTlsVerification(source)) {
+    issues.push({
+      filePath: report.path,
+      severity: 'High',
+      concern: 'TLS verification appears to be disabled.',
+      detail: 'Disabling certificate verification can make server-to-server requests vulnerable to interception.',
+      nextStep: 'Remove the TLS bypass and fix the certificate or local development setup instead.',
+    });
+  }
+
+  if (hasWeakCrypto(source)) {
+    issues.push({
+      filePath: report.path,
+      severity: 'Medium',
+      concern: 'Weak hashing algorithm is present.',
+      detail: 'MD5 and SHA-1 are not suitable for password storage, signatures, or security-sensitive integrity checks.',
+      nextStep: 'Use a modern password hashing or signing approach appropriate to the use case.',
+    });
+  }
+
+  if (hasCommandExecution(source)) {
+    issues.push({
+      filePath: report.path,
+      severity: 'High',
+      concern: 'Shell command execution is present.',
+      detail: 'Command execution is high risk if any argument can be influenced by a user, request, or external input.',
+      nextStep: 'Avoid shell execution, or strictly validate and hard-code allowed commands and arguments.',
+    });
+  }
+
+  if (hasUnsafeDatabaseQuery(source)) {
+    issues.push({
+      filePath: report.path,
+      severity: 'High',
+      concern: 'Database query may use raw string input.',
+      detail: 'Raw SQL built from strings can expose customer or production data through injection bugs.',
+      nextStep: 'Use parameterized queries or ORM helpers instead of interpolated raw SQL.',
+    });
+  }
+
+  if (hasRiskyFileAccess(source)) {
+    issues.push({
+      filePath: report.path,
+      severity: 'Medium',
+      concern: 'File access may depend on request input.',
+      detail: 'Reading or writing paths from request data can create path traversal or unsafe file overwrite issues.',
+      nextStep: 'Resolve paths against an allowlisted directory and reject parent-directory traversal.',
+    });
+  }
+
+  if (hasServerOnlyClientLeak(source)) {
+    issues.push({
+      filePath: report.path,
+      severity: 'High',
+      concern: 'Client component appears to import server-only code.',
+      detail: 'Server-only modules, filesystem access, command execution, or environment secrets should not enter browser bundles.',
+      nextStep: 'Move server-only work behind a route, server action, loader, or API boundary.',
+    });
+  }
+
   return issues;
 }
 
@@ -166,8 +276,19 @@ export async function runSecurityCheck(reports: FileReport[]): Promise<void> {
   console.log(chalk.bold.white('━━━  ZENOAI — SECURITY CHECK  ━━━'));
   console.log(chalk.dim(`Project     : ${basename(process.cwd())}`));
   console.log(chalk.dim('Reviewed by : Security Reviewer'));
+  console.log(chalk.dim('Scan type   : Local static scan'));
   console.log(chalk.dim(`Files       : ${inspectedReports.length}`));
   console.log(chalk.dim(`Date        : ${date}, ${time}\n`));
+
+  console.log(chalk.bold('What Zeno checked'));
+  console.log(chalk.dim('  - exposed secrets and client/server boundary leaks'));
+  console.log(chalk.dim('  - auth, webhook, payment, cart, order, and billing routes'));
+  console.log(chalk.dim('  - unsafe redirects and permissive CORS'));
+  console.log(chalk.dim('  - raw HTML rendering and dynamic code execution'));
+  console.log(chalk.dim('  - weak crypto, disabled TLS, command execution, and risky file/database access\n'));
+
+  console.log(chalk.bold('Note'));
+  console.log(chalk.dim('  This checks obvious risk signals. It is not a full security audit.\n'));
 
   console.log(chalk.dim('Are there obvious security risks?'));
   if (issues.length === 0) {
@@ -179,13 +300,6 @@ export async function runSecurityCheck(reports: FileReport[]): Promise<void> {
   }
 
   console.log(`${chalk.bold(severityFn('Yes'))}  ${severityFn(`[${severity} risk]`)}\n`);
-
-  console.log(chalk.bold('What Zeno checked'));
-  console.log(chalk.dim('  - exposed secrets'));
-  console.log(chalk.dim('  - auth, webhook, payment, cart, order, and billing routes'));
-  console.log(chalk.dim('  - unsafe redirects'));
-  console.log(chalk.dim('  - raw HTML rendering'));
-  console.log(chalk.dim('  - dynamic code execution\n'));
 
   console.log(chalk.bold('Main concern'));
   const mainIssue = issues[0];
