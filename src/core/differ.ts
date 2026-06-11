@@ -9,6 +9,7 @@ import { rollback } from './preflight.js';
 
 const FILE_ENCODING = 'utf8' as const;
 const REPORT_PATH_COL_WIDTH = 40;
+const PROJECT_VALIDATION_TIMEOUT_MS = 180_000;
 
 interface ZenoManifest {
   runId: string;
@@ -61,6 +62,61 @@ function printSkippedResult(result: ValidatorResult): void {
     for (const candidate of result.largeFileAdvisory.extractionCandidates.slice(0, 3)) {
       console.log(`  ${chalk.dim('- ' + candidate)}`);
     }
+  }
+}
+
+async function getProjectValidationCommand(): Promise<string | null> {
+  try {
+    const pkg = JSON.parse(await readFile('package.json', FILE_ENCODING)) as {
+      scripts?: Record<string, string>;
+    };
+    const scripts = pkg.scripts ?? {};
+    if (scripts.typecheck) return 'npm run typecheck';
+    if (scripts.build) return 'npm run build';
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+async function restoreUncommittedAcceptedFiles(results: ValidatorResult[]): Promise<void> {
+  const modifiedPaths = results
+    .filter(result => result.status === 'accepted' && result.refactoredSource !== undefined)
+    .map(result => result.filePath);
+
+  const createdPaths = results
+    .filter(result => result.status === 'accepted')
+    .flatMap(result => result.createdFiles?.map(file => file.path) ?? []);
+
+  if (modifiedPaths.length > 0) {
+    execSync(`git checkout HEAD -- ${modifiedPaths.map(path => `"${path}"`).join(' ')}`);
+  }
+
+  for (const createdPath of createdPaths) {
+    await unlink(createdPath).catch(() => undefined);
+  }
+}
+
+async function runProjectValidation(): Promise<{ passed: true; command: string | null } | { passed: false; command: string; reason: string }> {
+  const command = await getProjectValidationCommand();
+  if (!command) return { passed: true, command: null };
+
+  try {
+    execSync(command, {
+      cwd: process.cwd(),
+      stdio: 'pipe',
+      timeout: PROJECT_VALIDATION_TIMEOUT_MS,
+      encoding: FILE_ENCODING,
+    });
+    return { passed: true, command };
+  } catch (error) {
+    const err = error as { stdout?: string; stderr?: string; message?: string };
+    const output = `${err.stdout ?? ''}\n${err.stderr ?? ''}`.trim();
+    return {
+      passed: false,
+      command,
+      reason: output.split('\n').slice(-12).join('\n') || err.message || 'project validation failed',
+    };
   }
 }
 
@@ -153,6 +209,31 @@ export async function runDiffer(
     return { approved: false, merged: false, appliedFiles: [], skippedFiles: results.map(r => r.filePath) };
   }
 
+  const validation = await runProjectValidation();
+  if (!validation.passed) {
+    await restoreUncommittedAcceptedFiles(results);
+    console.log(chalk.red(`Project validation failed after applying Zeno changes: ${validation.command}`));
+    console.log(chalk.dim(validation.reason));
+
+    const skippedEntries = results
+      .filter(r => r.status === 'accepted')
+      .map(r => ({ path: r.filePath, reason: `project validation failed: ${validation.command}` }));
+
+    await saveHistory(
+      process.cwd(),
+      [],
+      skippedEntries,
+      manifest.action as HistoryAction,
+    );
+
+    await rollback(manifestPath);
+    return { approved: false, merged: false, appliedFiles: [], skippedFiles: results.map(r => r.filePath) };
+  }
+
+  if (validation.command) {
+    console.log(chalk.green(`✓ Project validation passed: ${validation.command}`));
+  }
+
   await writeFile(manifestPath, JSON.stringify(manifest, null, 2), FILE_ENCODING);
 
   const acceptedPaths = results
@@ -188,7 +269,11 @@ export async function runDiffer(
   console.log(chalk.bold.white(`\nACCEPTED (${acceptedResults.length} files)\n`));
   for (const result of acceptedResults) {
     const score = formatConfidenceScore(result.confidenceScore);
-    const lines = result.linesChanged !== undefined ? `+${result.linesChanged} lines` : '';
+    const lines = result.linesChanged !== undefined
+      ? manifest.action === 'split'
+        ? `${result.linesChanged} lines extracted`
+        : `+${result.linesChanged} lines`
+      : '';
     console.log(`  ${chalk.cyan(result.filePath.padEnd(REPORT_PATH_COL_WIDTH))} ${chalk.green(score)}   ${chalk.dim(lines)}`);
     for (const createdFile of result.createdFiles ?? []) {
       console.log(`  ${chalk.cyan(createdFile.path.padEnd(REPORT_PATH_COL_WIDTH))} ${chalk.green(score)}   ${chalk.dim('created')}`);

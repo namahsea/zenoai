@@ -10,6 +10,7 @@ const MIN_EXTRACTED_LINES = 20;
 
 interface ExtractableStatement {
   names: string[];
+  dependencies: string[];
   start: number;
   end: number;
   text: string;
@@ -53,6 +54,29 @@ function referencesRuntimeBoundary(text: string): boolean {
   return /\b(window|document|navigator|localStorage|sessionStorage|process|React|THREE|gsap|ScrollTrigger|Lenis)\b/.test(text);
 }
 
+function collectInitializerDependencies(initializer: ts.Expression): string[] {
+  const dependencies = new Set<string>();
+
+  function visit(node: ts.Node): void {
+    if (ts.isIdentifier(node)) {
+      const parent = node.parent;
+      const isObjectPropertyKey =
+        ts.isPropertyAssignment(parent) && parent.name === node;
+      const isPropertyAccessName =
+        ts.isPropertyAccessExpression(parent) && parent.name === node;
+
+      if (!isObjectPropertyKey && !isPropertyAccessName) {
+        dependencies.add(node.text);
+      }
+    }
+
+    ts.forEachChild(node, visit);
+  }
+
+  visit(initializer);
+  return [...dependencies];
+}
+
 function getImportInsertPosition(sourceFile: ts.SourceFile): number {
   let insertPosition = 0;
 
@@ -85,6 +109,7 @@ function collectExtractableStatements(sourceFile: ts.SourceFile): ExtractableSta
     if (hasExportModifier(statement)) continue;
 
     const names: string[] = [];
+    const dependencies = new Set<string>();
     let extractable = true;
 
     for (const declaration of statement.declarationList.declarations) {
@@ -104,6 +129,10 @@ function collectExtractableStatements(sourceFile: ts.SourceFile): ExtractableSta
         break;
       }
 
+      for (const dependency of collectInitializerDependencies(declaration.initializer)) {
+        dependencies.add(dependency);
+      }
+
       names.push(declaration.name.text);
     }
 
@@ -113,6 +142,7 @@ function collectExtractableStatements(sourceFile: ts.SourceFile): ExtractableSta
     const lineCount = text.split('\n').length;
     candidates.push({
       names,
+      dependencies: [...dependencies].filter(dependency => !names.includes(dependency)),
       start: statement.getFullStart(),
       end: statement.end,
       text,
@@ -125,13 +155,16 @@ function collectExtractableStatements(sourceFile: ts.SourceFile): ExtractableSta
 
 function selectExtractionSet(candidates: ExtractableStatement[]): ExtractableStatement[] {
   const selected: ExtractableStatement[] = [];
+  const selectedNames = new Set<string>();
   let lineCount = 0;
 
   for (const candidate of candidates) {
     if (selected.length >= MAX_EXTRACTED_STATEMENTS) break;
     if (lineCount >= MAX_EXTRACTED_LINES) break;
+    if (candidate.dependencies.some(dependency => !selectedNames.has(dependency))) continue;
 
     selected.push(candidate);
+    for (const name of candidate.names) selectedNames.add(name);
     lineCount += candidate.lineCount;
   }
 
@@ -154,7 +187,49 @@ function buildImportSpecifier(fromFilePath: string, toFilePath: string): string 
 }
 
 function addExport(statementText: string): string {
-  return statementText.replace(/^(\s*)const\b/, '$1export const');
+  return statementText.replace(/^(\s*)const\b/m, '$1export const');
+}
+
+function collectExportedConstNames(sourceFile: ts.SourceFile): Set<string> {
+  const exportedNames = new Set<string>();
+
+  for (const statement of sourceFile.statements) {
+    if (!ts.isVariableStatement(statement)) continue;
+    if (!isConstVariableStatement(statement)) continue;
+    if (!hasExportModifier(statement)) continue;
+
+    for (const declaration of statement.declarationList.declarations) {
+      if (ts.isIdentifier(declaration.name)) {
+        exportedNames.add(declaration.name.text);
+      }
+    }
+  }
+
+  return exportedNames;
+}
+
+function findMissingExports(sourceFile: ts.SourceFile, expectedNames: string[]): string[] {
+  const exportedNames = collectExportedConstNames(sourceFile);
+  return expectedNames.filter(name => !exportedNames.has(name));
+}
+
+function collectImportedNames(sourceFile: ts.SourceFile, moduleSpecifier: string): string[] {
+  const importedNames: string[] = [];
+
+  for (const statement of sourceFile.statements) {
+    if (!ts.isImportDeclaration(statement)) continue;
+    if (!ts.isStringLiteral(statement.moduleSpecifier)) continue;
+    if (statement.moduleSpecifier.text !== moduleSpecifier) continue;
+
+    const namedBindings = statement.importClause?.namedBindings;
+    if (!namedBindings || !ts.isNamedImports(namedBindings)) continue;
+
+    for (const element of namedBindings.elements) {
+      importedNames.push(element.name.text);
+    }
+  }
+
+  return importedNames;
 }
 
 function validateSyntax(fileName: string, source: string): string | null {
@@ -226,6 +301,19 @@ export async function runStaticSplit(fileReport: FileReport): Promise<ValidatorR
       status: 'skipped',
       confidenceScore: 0,
       skipReason: `created split module failed syntax validation: ${splitSyntaxError}`,
+    };
+  }
+
+  const updatedSourceFile = ts.createSourceFile(fileReport.path, updatedSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const splitSourceFile = ts.createSourceFile(splitFilePath, splitSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+  const actualImportedNames = collectImportedNames(updatedSourceFile, importSpecifier);
+  const missingExports = findMissingExports(splitSourceFile, actualImportedNames);
+  if (missingExports.length > 0) {
+    return {
+      filePath: fileReport.path,
+      status: 'skipped',
+      confidenceScore: 0,
+      skipReason: `created split module is missing exports: ${missingExports.join(', ')}`,
     };
   }
 
