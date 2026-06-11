@@ -34,10 +34,18 @@ function renderBar(label: string, current: number, total: number, showCount: boo
   );
 }
 
+function clearProgressLine(): void {
+  process.stdout.write('\r\x1b[2K');
+}
+
 export async function runProgress<T>(
   options: ProgressOptions,
   task: () => Promise<T>,
 ): Promise<T> {
+  if (!process.stdout.isTTY) {
+    return task();
+  }
+
   const total = Math.max(options.total, 1);
   const duration = progressDuration(options.total, options.minDurationMs, options.maxDurationMs);
   const startedAt = Date.now();
@@ -74,7 +82,7 @@ export async function runProgress<T>(
 
       if (taskDone && current >= total) {
         clearInterval(interval);
-        process.stdout.write('\n');
+        clearProgressLine();
         resolve();
       }
     }, 80);
