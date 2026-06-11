@@ -21,7 +21,6 @@ import { confirm } from '@inquirer/prompts';
 import { runDiffer } from './differ.js';
 import { runStaticSplit } from './splitter.js';
 import { runSecurityCheck } from './securityCheck.js';
-import { runProgress } from './progress.js';
 import { ZENO_MODELS } from './models.js';
 import type { ZenoConfig } from '../config.js';
 import type { HealthReport, RiskLevel, HealthLabel } from '../types.js';
@@ -76,6 +75,10 @@ Rules:
   - Low: minor issues, safe to modify.
   Do not assign Critical based on line count alone. A 200-line auth file with no tests is more Critical than a 600-line utility with no tests.
 - The "start" field must always recommend the highest-consequence action, not the easiest one. Prioritise files that handle payments, auth, data writes, or external APIs. Never recommend starting with logging cleanup or formatting changes when untested critical business logic exists in the codebase.`;
+
+function modelForProvider(provider: ZenoConfig['provider']): string {
+  return ZENO_MODELS[provider];
+}
 
 async function callAI(config: ZenoConfig, userMessage: string): Promise<string> {
   const { provider, apiKey } = config;
@@ -200,16 +203,9 @@ export async function runOrchestrator(opts: RunOptions): Promise<void> {
 
     const MAX_SEND = 50;
 
-    const { reports: allFiles, skipped } = await runProgress(
-      {
-        label: 'reading project',
-        total: 12,
-        minDurationMs: 1000,
-        maxDurationMs: 2200,
-        showCount: false,
-      },
-      () => analyse(root),
-    );
+    const analyseSpinner = ora('Analysing project...').start();
+    const { reports: allFiles, skipped } = await analyse(root);
+    analyseSpinner.succeed(`Found ${allFiles.length} files`);
 
     // foundTotal counts everything before the send cap is applied
     const foundTotal = allFiles.length + skipped.length;
@@ -266,6 +262,18 @@ export async function runOrchestrator(opts: RunOptions): Promise<void> {
         console.log(chalk.hex('#FFA500')(`Warning: only ${files.length} file${files.length === 1 ? '' : 's'} found — this may be incomplete. Make sure you are running zenoai from your project root.\n`));
       }
     }
+
+    console.log(chalk.cyan('AI review'));
+    console.log(chalk.dim(`  Provider : ${opts.config.provider}`));
+    console.log(chalk.dim(`  Model    : ${modelForProvider(opts.config.provider)}`));
+    console.log(chalk.dim('  Calls    : 1 model call\n'));
+
+    const proceedWithReview = await confirm({ message: 'Proceed with this AI review?', default: true });
+    if (!proceedWithReview) {
+      console.log(chalk.yellow('\nRun cancelled. No model call was made.'));
+      process.exit(0);
+    }
+    console.log('');
 
     const LATE_MESSAGES = [
       'mapping dependencies…',
