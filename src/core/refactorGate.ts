@@ -9,6 +9,11 @@ export type RefactorGateDecision =
   | { kind: 'large-file-advisory'; reason: string }
   | { kind: 'skip'; reason: string };
 
+export interface PrePlannerGateResult {
+  eligibleReports: FileReport[];
+  skippedFiles: Array<{ path: string; reason: string }>;
+}
+
 const GENERATED_MARKERS = [
   '@generated',
   'auto-generated',
@@ -110,4 +115,24 @@ export async function runRefactorGate(
   }
 
   return { kind: 'refactor' };
+}
+
+export async function runPrePlannerGate(
+  reports: FileReport[],
+  action: 'humanise' | 'slim' | 'stress-test',
+): Promise<PrePlannerGateResult> {
+  const eligibleReports: FileReport[] = [];
+  const skippedFiles: Array<{ path: string; reason: string }> = [];
+
+  for (const report of reports) {
+    const decision = await runRefactorGate(report.path, action, report);
+    if (decision.kind === 'skip') {
+      skippedFiles.push({ path: report.path, reason: `pre-planner gate: ${decision.reason}` });
+      continue;
+    }
+
+    eligibleReports.push(report);
+  }
+
+  return { eligibleReports, skippedFiles };
 }

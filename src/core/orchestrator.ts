@@ -16,7 +16,7 @@ import { runValidator } from './validator.js';
 import type { ValidatorResult } from './validator.js';
 import { runCritic } from './critic.js';
 import { runLargeFileAdvisor } from './largeFileAdvisor.js';
-import { runRefactorGate } from './refactorGate.js';
+import { runPrePlannerGate, runRefactorGate } from './refactorGate.js';
 import { confirm } from '@inquirer/prompts';
 import { runDiffer } from './differ.js';
 import type { ZenoConfig } from '../config.js';
@@ -425,9 +425,29 @@ export async function runPhase2(
   const reportByPath = new Map(reports.map(report => [report.path, report]));
   spinner.succeed(`Found ${reports.length} files`);
 
+  spinner.start('Filtering safe candidates...');
+  const preGate = await runPrePlannerGate(reports, action);
+  spinner.succeed(`Eligible ${preGate.eligibleReports.length} files after local gating`);
+
+  if (preGate.skippedFiles.length > 0) {
+    console.log(chalk.dim(`ⓘ ${preGate.skippedFiles.length} files excluded before planning.`));
+    for (const skipped of preGate.skippedFiles.slice(0, 8)) {
+      console.log(chalk.dim(`  skipped before planning: ${skipped.path} (${skipped.reason})`));
+    }
+    if (preGate.skippedFiles.length > 8) {
+      console.log(chalk.dim(`  ...and ${preGate.skippedFiles.length - 8} more`));
+    }
+    console.log('');
+  }
+
+  if (preGate.eligibleReports.length === 0) {
+    console.log(chalk.yellow(`No eligible files found for ${action}. Try a different action or reset .zeno-history.json.`));
+    process.exit(0);
+  }
+
   // Step 3 — planner
   spinner.start('Planning safe refactor order...');
-  const plan = await runPlanner(graph, reports, action);
+  const plan = await runPlanner(graph, preGate.eligibleReports, action);
   spinner.succeed(`Selected ${plan.selectedFiles.length} files to refactor`);
 
   if (plan.selectedFiles.length === 0) {
