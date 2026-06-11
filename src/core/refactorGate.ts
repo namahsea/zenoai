@@ -55,6 +55,43 @@ function isMinimalLayout(filePath: string, source: string, report: FileReport | 
   return meaningfulLineCount(source) <= 35;
 }
 
+function isFrameworkShellPath(filePath: string): boolean {
+  const normalized = filePath.replace(/\\/g, '/');
+  const fileName = basename(normalized);
+
+  return (
+    /^app\/entry\.(server|client)\.[tj]sx?$/.test(normalized) ||
+    /^app\/root\.[tj]sx?$/.test(normalized) ||
+    /^app\/routes\/_index\/route\.[tj]sx?$/.test(normalized) ||
+    /^app\/routes\/[^/]+\.[tj]sx?$/.test(normalized) ||
+    fileName === 'page.tsx' ||
+    fileName === 'page.jsx' ||
+    fileName === 'layout.tsx' ||
+    fileName === 'layout.jsx' ||
+    fileName === 'loading.tsx' ||
+    fileName === 'loading.jsx' ||
+    fileName === 'error.tsx' ||
+    fileName === 'error.jsx' ||
+    fileName === 'not-found.tsx' ||
+    fileName === 'not-found.jsx'
+  );
+}
+
+function isLowComplexityFrameworkShell(
+  filePath: string,
+  source: string,
+  report: FileReport | undefined,
+  action: 'humanise' | 'slim' | 'stress-test',
+): boolean {
+  if (action !== 'humanise') return false;
+  if (!isFrameworkShellPath(filePath)) return false;
+  if ((report?.lines ?? 0) > 150) return false;
+  if ((report?.functions ?? 0) > 2) return false;
+  if (report?.hasReactSignals || report?.hasBrowserGlobals || report?.hasProcessEnv) return false;
+  if ((report?.consoleLogs ?? 0) > 0) return false;
+  return meaningfulLineCount(source) <= 90;
+}
+
 function isTrivialForAction(source: string, report: FileReport | undefined, action: 'humanise' | 'slim' | 'stress-test'): boolean {
   if (action === 'stress-test') return false;
   if ((report?.functions ?? 0) > 0) return false;
@@ -108,6 +145,10 @@ export async function runRefactorGate(
 
   if (isMinimalLayout(filePath, source, report)) {
     return { kind: 'skip', reason: 'minimal layout file with no local logic to refactor' };
+  }
+
+  if (isLowComplexityFrameworkShell(filePath, source, report, action)) {
+    return { kind: 'skip', reason: 'low-complexity framework shell with no focused humanise target' };
   }
 
   if (isTrivialForAction(source, report, action)) {

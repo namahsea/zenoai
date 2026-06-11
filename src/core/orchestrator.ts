@@ -407,6 +407,17 @@ function legibilityColor(score: number): string {
   return chalk.red(String(score));
 }
 
+function printNoStrongTargetsMessage(action: 'humanise' | 'slim' | 'stress-test'): void {
+  console.log(chalk.yellow(`No strong ${action} targets found.`));
+  if (action === 'humanise' || action === 'slim') {
+    console.log(chalk.dim('Most remaining files are already too small, framework shells, generated, high-consequence without tests, or better suited for splitting.'));
+    console.log(chalk.dim('Try Stress test it for routes/webhooks/auth/payment flows, or Split it later for large components.'));
+    return;
+  }
+
+  console.log(chalk.dim('No useful test targets were found after local safety filters. Try a different project area or reset .zeno-history.json.'));
+}
+
 export async function runPhase2(
   projectPath: string,
   action: 'humanise' | 'slim' | 'stress-test',
@@ -441,7 +452,7 @@ export async function runPhase2(
   }
 
   if (preGate.eligibleReports.length === 0) {
-    console.log(chalk.yellow(`No eligible files found for ${action}. Try a different action or reset .zeno-history.json.`));
+    printNoStrongTargetsMessage(action);
     process.exit(0);
   }
 
@@ -451,7 +462,7 @@ export async function runPhase2(
   spinner.succeed(`Selected ${plan.selectedFiles.length} files to refactor`);
 
   if (plan.selectedFiles.length === 0) {
-    console.log(chalk.yellow('No files selected for this action. Try a different action or project.'));
+    printNoStrongTargetsMessage(action);
     process.exit(0);
   }
 
