@@ -407,11 +407,32 @@ function legibilityColor(score: number): string {
   return chalk.red(String(score));
 }
 
-function printNoStrongTargetsMessage(action: 'humanise' | 'slim' | 'stress-test'): void {
+function printNoStrongTargetsMessage(
+  action: 'humanise' | 'slim' | 'stress-test',
+  skippedFiles: Array<{ path: string; reason: string }> = [],
+): void {
   console.log(chalk.yellow(`No strong ${action} targets found.`));
+  const skippedText = skippedFiles.map(s => `${s.path} ${s.reason}`).join('\n').toLowerCase();
+
   if (action === 'humanise' || action === 'slim') {
-    console.log(chalk.dim('Most remaining files are already too small, framework shells, generated, high-consequence without tests, or better suited for splitting.'));
-    console.log(chalk.dim('Try Stress test it for routes/webhooks/auth/payment flows, or Split it later for large components.'));
+    const recommendations: string[] = [];
+    if (skippedText.includes('high-consequence') || skippedText.includes('server integration')) {
+      recommendations.push('Try Stress test it for routes, webhooks, auth, payment, or server integration flows.');
+    }
+    if (skippedText.includes('too large')) {
+      recommendations.push('Use Split it later for large components or route modules.');
+    }
+    if (skippedText.includes('framework shell') || skippedText.includes('configuration file')) {
+      recommendations.push('Framework shell and config files usually need tests or feature work, not readability cleanup.');
+    }
+    if (recommendations.length === 0) {
+      recommendations.push('Try a different action or a narrower project directory with more local business logic.');
+    }
+
+    console.log(chalk.dim('Most remaining files are already too small, framework shells, config/integration files, high-consequence without tests, or better suited for splitting.'));
+    for (const recommendation of recommendations) {
+      console.log(chalk.dim(recommendation));
+    }
     return;
   }
 
@@ -452,7 +473,7 @@ export async function runPhase2(
   }
 
   if (preGate.eligibleReports.length === 0) {
-    printNoStrongTargetsMessage(action);
+    printNoStrongTargetsMessage(action, preGate.skippedFiles);
     process.exit(0);
   }
 
@@ -462,7 +483,7 @@ export async function runPhase2(
   spinner.succeed(`Selected ${plan.selectedFiles.length} files to refactor`);
 
   if (plan.selectedFiles.length === 0) {
-    printNoStrongTargetsMessage(action);
+    printNoStrongTargetsMessage(action, preGate.skippedFiles);
     process.exit(0);
   }
 

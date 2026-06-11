@@ -92,6 +92,40 @@ function isLowComplexityFrameworkShell(
   return meaningfulLineCount(source) <= 90;
 }
 
+function isConfigFilePath(filePath: string): boolean {
+  const normalized = filePath.replace(/\\/g, '/');
+  return /(^|\/)(vite|next|remix|tailwind|eslint|postcss|tsup|webpack|rollup|playwright|vitest|jest|babel|prettier)\.config\.[cm]?[tj]sx?$/.test(normalized);
+}
+
+function isLowComplexityConfigFile(
+  filePath: string,
+  report: FileReport | undefined,
+  action: 'humanise' | 'slim' | 'stress-test',
+): boolean {
+  if (action !== 'humanise') return false;
+  if (!isConfigFilePath(filePath)) return false;
+  return (report?.lines ?? 0) <= 200 && (report?.functions ?? 0) <= 4;
+}
+
+function isServerIntegrationShellPath(filePath: string): boolean {
+  const normalized = filePath.replace(/\\/g, '/');
+  return (
+    /(^|\/)shopify\.server\.[tj]sx?$/.test(normalized) ||
+    /^app\/.*\.server\.[tj]sx?$/.test(normalized)
+  );
+}
+
+function isLowComplexityServerIntegrationShell(
+  filePath: string,
+  report: FileReport | undefined,
+  action: 'humanise' | 'slim' | 'stress-test',
+): boolean {
+  if (action !== 'humanise') return false;
+  if (!isServerIntegrationShellPath(filePath)) return false;
+  if (report?.hasTest) return false;
+  return (report?.lines ?? 0) <= 220 && (report?.functions ?? 0) <= 4;
+}
+
 function isTrivialForAction(source: string, report: FileReport | undefined, action: 'humanise' | 'slim' | 'stress-test'): boolean {
   if (action === 'stress-test') return false;
   if ((report?.functions ?? 0) > 0) return false;
@@ -149,6 +183,14 @@ export async function runRefactorGate(
 
   if (isLowComplexityFrameworkShell(filePath, source, report, action)) {
     return { kind: 'skip', reason: 'low-complexity framework shell with no focused humanise target' };
+  }
+
+  if (isLowComplexityConfigFile(filePath, report, action)) {
+    return { kind: 'skip', reason: 'configuration file with no focused humanise target' };
+  }
+
+  if (isLowComplexityServerIntegrationShell(filePath, report, action)) {
+    return { kind: 'skip', reason: 'server integration shell with no tests — run Stress test it before refactoring' };
   }
 
   if (isTrivialForAction(source, report, action)) {
