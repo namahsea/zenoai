@@ -163,11 +163,12 @@ function isStaticPresentationalComponent(
 ): boolean {
   if (action !== 'humanise') return false;
   if (!filePath.endsWith('.tsx') && !filePath.endsWith('.jsx')) return false;
-  if ((report?.functions ?? 0) > 1) return false;
-  if (report?.hasReactSignals || report?.hasBrowserGlobals || report?.hasProcessEnv || report?.hasMutableExports) return false;
+  if ((report?.functions ?? 0) > 3) return false;
+  if (report?.hasBrowserGlobals || report?.hasProcessEnv || report?.hasMutableExports) return false;
   if ((report?.consoleLogs ?? 0) > 0) return false;
   if (meaningfulLineCount(source) > 260) return false;
   if (!/<[A-Z][A-Za-z0-9.]*\b|<[a-z][A-Za-z0-9-]*\b/.test(source)) return false;
+  if (/\b(useState|useEffect|useMemo|useCallback|useRef|useReducer)\b/.test(source)) return false;
 
   return !/\b(const|let|var)\s+\w+\s*=|\b(if|for|while|switch|try|catch)\b|\.map\s*\(|\b(async|await|fetch)\b/.test(source);
 }
