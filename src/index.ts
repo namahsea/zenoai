@@ -177,7 +177,7 @@ async function main() {
 
   const projectName = basename(process.cwd());
   const action = await select({
-    message: `What do you want Zeno to do for ${projectName}?`,
+    message: `What do you want Zeno to do for ${projectName}?\n`,
     choices: ZENO_ACTIONS.map((a) => ({
       value: a.value,
       description: a.description,

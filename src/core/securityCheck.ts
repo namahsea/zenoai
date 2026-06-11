@@ -11,6 +11,7 @@ interface SecurityIssue {
   severity: SecuritySeverity;
   concern: string;
   detail: string;
+  nextStep: string;
 }
 
 function severityColor(severity: SecuritySeverity): (text: string) => string {
@@ -31,6 +32,14 @@ function overallSeverity(issues: SecurityIssue[]): SecuritySeverity {
 
 function looksLikeWebhook(filePath: string): boolean {
   return /webhook|webhooks/i.test(filePath);
+}
+
+function looksLikeAuthOrSession(filePath: string): boolean {
+  return /(?:^|[./_-])(auth|session|login)(?:[./_-]|$)/i.test(filePath);
+}
+
+function looksLikeDataRoute(filePath: string): boolean {
+  return /(?:^|[./_-])(checkout|checkouts|payment|payments|order|orders|subscription|subscriptions|billing|cart|carts)(?:[./_-]|$)/i.test(filePath);
 }
 
 function hasDataWrite(source: string): boolean {
@@ -73,15 +82,25 @@ async function inspectFile(report: FileReport): Promise<SecurityIssue[]> {
       severity: 'High',
       concern: 'Webhook route changes data before verification is obvious.',
       detail: 'Public webhook routes should prove the request is trusted before writing customer, cart, order, or subscription data.',
+      nextStep: 'Confirm webhook signature verification happens before any database write.',
     });
   }
 
-  if (isHighConsequencePath(report.path) && !report.hasTest) {
+  if (looksLikeAuthOrSession(report.path) && !report.hasTest) {
     issues.push({
       filePath: report.path,
-      severity: 'Medium',
+      severity: 'High',
+      concern: 'Auth or session route has no visible safety tests.',
+      detail: 'Login and session routes decide who can access the app. Bugs here can lock users out or expose accounts.',
+      nextStep: 'Review session creation, failed login, and unauthorized access behavior.',
+    });
+  } else if ((looksLikeWebhook(report.path) || looksLikeDataRoute(report.path) || isHighConsequencePath(report.path)) && !report.hasTest) {
+    issues.push({
+      filePath: report.path,
+      severity: looksLikeWebhook(report.path) ? 'High' : 'Medium',
       concern: 'High-impact route has no visible safety tests.',
-      detail: 'Auth, webhook, billing, checkout, cart, and order routes can affect real users or production data.',
+      detail: 'Webhook, billing, checkout, cart, and order routes can affect real users or production data.',
+      nextStep: 'Add tests around the route before changing it or shipping new behavior.',
     });
   }
 
@@ -91,6 +110,7 @@ async function inspectFile(report: FileReport): Promise<SecurityIssue[]> {
       severity: 'Critical',
       concern: 'Secret-looking value appears in source code.',
       detail: 'API keys, tokens, and secrets should live in environment variables and never ship to the browser.',
+      nextStep: 'Move the value to an environment variable and rotate it if it may have been exposed.',
     });
   }
 
@@ -100,6 +120,7 @@ async function inspectFile(report: FileReport): Promise<SecurityIssue[]> {
       severity: 'High',
       concern: 'Dynamic code execution is present.',
       detail: 'eval-style code can turn user-controlled input into executable code.',
+      nextStep: 'Remove dynamic code execution or strictly isolate it from user-controlled input.',
     });
   }
 
@@ -109,6 +130,7 @@ async function inspectFile(report: FileReport): Promise<SecurityIssue[]> {
       severity: 'Medium',
       concern: 'Raw HTML rendering is present.',
       detail: 'Raw HTML must be sanitized before rendering or it can expose users to script injection.',
+      nextStep: 'Confirm the HTML is sanitized before rendering.',
     });
   }
 
@@ -118,6 +140,7 @@ async function inspectFile(report: FileReport): Promise<SecurityIssue[]> {
       severity: 'Medium',
       concern: 'Redirect may depend on request input.',
       detail: 'User-controlled redirects should only allow known internal destinations.',
+      nextStep: 'Restrict redirects to known internal paths or an allowlist.',
     });
   }
 
@@ -157,6 +180,13 @@ export async function runSecurityCheck(reports: FileReport[]): Promise<void> {
 
   console.log(`${chalk.bold(severityFn('Yes'))}  ${severityFn(`[${severity} risk]`)}\n`);
 
+  console.log(chalk.bold('What Zeno checked'));
+  console.log(chalk.dim('  - exposed secrets'));
+  console.log(chalk.dim('  - auth, webhook, payment, cart, order, and billing routes'));
+  console.log(chalk.dim('  - unsafe redirects'));
+  console.log(chalk.dim('  - raw HTML rendering'));
+  console.log(chalk.dim('  - dynamic code execution\n'));
+
   console.log(chalk.bold('Main concern'));
   const mainIssue = issues[0];
   console.log(`  ${mainIssue.concern}`);
@@ -171,6 +201,6 @@ export async function runSecurityCheck(reports: FileReport[]): Promise<void> {
   console.log('');
 
   console.log(chalk.bold('Safest next step'));
-  console.log(`  Check ${mainIssue.filePath} first. ${mainIssue.detail}\n`);
+  console.log(`  Start with ${mainIssue.filePath}. ${mainIssue.nextStep}\n`);
   console.log(chalk.bold.white('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
 }
