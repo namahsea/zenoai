@@ -263,7 +263,8 @@ export async function runOrchestrator(opts: RunOptions): Promise<void> {
       let hasPkgJson = false;
       try { await access(join(root, 'package.json')); hasPkgJson = true; } catch { /* not found */ }
       if (hasPkgJson) {
-        console.log(chalk.hex('#FFA500')(`Warning: only ${files.length} file${files.length === 1 ? '' : 's'} found — this may be incomplete. Make sure you are running zenoai from your project root.\n`));
+        console.log(chalk.cyan(`Note: Zeno found ${files.length} JavaScript/TypeScript source file${files.length === 1 ? '' : 's'} to review.`));
+        console.log(chalk.dim('  For small apps or landing pages, that may be expected.\n'));
       }
     }
 
