@@ -3,6 +3,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { select, input } from '@inquirer/prompts';
 import chalk from 'chalk';
+import { theme } from './core/theme.js';
 
 const CONFIG_DIR = join(homedir(), '.zenoai');
 const CONFIG_PATH = join(CONFIG_DIR, 'config.json');
@@ -86,9 +87,9 @@ export async function ensureConfig(): Promise<ZenoConfig> {
   const existing = await readConfig();
   if (existing) return existing;
 
-  console.log(chalk.bold.cyan('\n  Welcome to zenoai!\n'));
+  console.log(theme.title('\n  Welcome to zenoai!\n'));
   console.log(
-    chalk.dim(
+    theme.muted(
       '  zenoai needs an AI provider API key to analyse your codebase.\n' +
       '  Your key is stored only in ~/.zenoai/config.json and is never\n' +
       '  logged or sent anywhere other than the provider you choose.\n',
@@ -103,7 +104,7 @@ export async function ensureConfig(): Promise<ZenoConfig> {
     })),
   });
 
-  console.log(chalk.dim(`\n  Get your key at: ${KEY_HINTS[provider]}\n`));
+  console.log(theme.muted(`\n  Get your key at: ${KEY_HINTS[provider]}\n`));
 
   const apiKey = await input({
     message: `${PROVIDER_LABELS[provider]} API key:`,
@@ -113,7 +114,7 @@ export async function ensureConfig(): Promise<ZenoConfig> {
 
   const config: ZenoConfig = { provider, apiKey: apiKey.trim() };
   await saveConfig(config);
-  console.log(chalk.green('\n  Config saved to ~/.zenoai/config.json\n'));
+  console.log(theme.success('\n  Config saved to ~/.zenoai/config.json\n'));
 
   return config;
 }

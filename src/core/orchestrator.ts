@@ -26,6 +26,7 @@ import type { ZenoConfig } from '../config.js';
 import type { HealthReport, RiskLevel, HealthLabel } from '../types.js';
 import { classifySelectedFiles } from './refactorViability.js';
 import { MAX_AUTONOMOUS_REFACTOR_LINES } from './refactorLimits.js';
+import { healthTone, riskTone, theme } from './theme.js';
 
 export interface RunOptions {
   role: string;
@@ -148,21 +149,11 @@ async function callAI(config: ZenoConfig, userMessage: string): Promise<string> 
 
 
 function riskColor(risk: RiskLevel): string {
-  switch (risk) {
-    case 'Critical': return chalk.red(risk);
-    case 'High':     return chalk.hex('#EF9F27')(risk);
-    case 'Medium':   return chalk.yellow(risk);
-    case 'Low':      return chalk.green(risk);
-  }
+  return riskTone(risk)(risk);
 }
 
 function scoreChalk(label: HealthLabel): (text: string) => string {
-  switch (label) {
-    case 'Critical':
-    case 'Concerning': return chalk.red;
-    case 'Fair':       return chalk.yellow;
-    case 'Good':       return chalk.green;
-  }
+  return healthTone(label);
 }
 
 function actionSlug(action: string): string {
@@ -183,10 +174,10 @@ function isShipReadinessAction(action: string): boolean {
 }
 
 function shipAnswer(report: HealthReport): { answer: string; risk: string; color: (text: string) => string } {
-  if (report.score >= 8) return { answer: 'Safe to ship', risk: 'Low risk', color: chalk.green };
-  if (report.score >= 6) return { answer: 'Ship with caution', risk: 'Medium risk', color: chalk.yellow };
-  if (report.score >= 4) return { answer: 'Not yet', risk: 'High risk', color: chalk.hex('#EF9F27') };
-  return { answer: 'Do not ship', risk: 'Critical risk', color: chalk.red };
+  if (report.score >= 8) return { answer: 'Safe to ship', risk: 'Low risk', color: theme.success };
+  if (report.score >= 6) return { answer: 'Ship with caution', risk: 'Medium risk', color: chalk.hex('#FBBF24') };
+  if (report.score >= 4) return { answer: 'Not yet', risk: 'High risk', color: theme.caution };
+  return { answer: 'Do not ship', risk: 'Critical risk', color: theme.danger };
 }
 
 export async function runOrchestrator(opts: RunOptions): Promise<void> {
@@ -263,15 +254,15 @@ export async function runOrchestrator(opts: RunOptions): Promise<void> {
       let hasPkgJson = false;
       try { await access(join(root, 'package.json')); hasPkgJson = true; } catch { /* not found */ }
       if (hasPkgJson) {
-        console.log(chalk.cyan(`Note: Zeno found ${files.length} JavaScript/TypeScript source file${files.length === 1 ? '' : 's'} to review.`));
-        console.log(chalk.dim('  For small apps or landing pages, that may be expected.\n'));
+        console.log(theme.info(`Note: Zeno found ${files.length} JavaScript/TypeScript source file${files.length === 1 ? '' : 's'} to review.`));
+        console.log(theme.muted('  For small apps or landing pages, that may be expected.\n'));
       }
     }
 
-    console.log(chalk.cyan('AI review'));
-    console.log(chalk.dim(`  Provider : ${opts.config.provider}`));
-    console.log(chalk.dim(`  Model    : ${modelForProvider(opts.config.provider)}`));
-    console.log(chalk.dim('  Calls    : 1 model call\n'));
+    console.log(theme.heading('AI review'));
+    console.log(theme.muted(`  Provider : ${opts.config.provider}`));
+    console.log(theme.muted(`  Model    : ${modelForProvider(opts.config.provider)}`));
+    console.log(theme.muted('  Calls    : 1 model call\n'));
 
     const proceedWithReview = await confirm({ message: 'Proceed with this AI review?', default: true });
     if (!proceedWithReview) {
@@ -293,7 +284,7 @@ export async function runOrchestrator(opts: RunOptions): Promise<void> {
       if (elapsed < 5)       phase = 'working…';
       else if (elapsed < 10) phase = "this one's taking a moment…";
       else                   phase = lateMsg;
-      return chalk.bold.white('Zeno') + chalk.dim(' — ') + chalk.hex('#FFB86C')(phase);
+      return theme.heading('Zeno') + theme.muted(' — ') + theme.caution(phase);
     }
 
     let elapsed = 0;
@@ -327,7 +318,7 @@ export async function runOrchestrator(opts: RunOptions): Promise<void> {
     try {
       raw = await callAI(opts.config, userMessage);
       clearSpinnerTimers();
-      spinner.succeed(chalk.bold.white('Zeno') + chalk.dim(` — done (${elapsed}s)`));
+      spinner.succeed(theme.heading('Zeno') + theme.muted(` — done (${elapsed}s)`));
     } catch (err) {
       clearSpinnerTimers();
       spinner.fail(chalk.red('failed'));
@@ -380,27 +371,27 @@ function printReport(report: HealthReport, root: string, fileCount: number, acti
   const labelFn = scoreChalk(report.label);
 
   // ── Header ──────────────────────────────────────────────────────────────────
-  console.log(chalk.bold.white('━━━  ZENOAI — CODEBASE HEALTH REPORT  ━━━'));
-  console.log(chalk.dim(`Directory : ${root}`));
-  console.log(chalk.dim(`Files     : ${fileCount}`));
-  console.log(chalk.dim(`Action    : ${action}`));
-  console.log(chalk.dim(`Date      : ${datetime}\n`));
+  console.log(theme.title('━━━  ZENOAI — CODEBASE HEALTH REPORT  ━━━'));
+  console.log(theme.muted(`Directory : ${root}`));
+  console.log(theme.muted(`Files     : ${fileCount}`));
+  console.log(theme.muted(`Action    : ${action}`));
+  console.log(theme.muted(`Date      : ${datetime}\n`));
 
   // ── Health Score ─────────────────────────────────────────────────────────────
-  console.log(chalk.bold('Health Score'));
+  console.log(theme.heading('Health Score'));
   console.log(`  ${chalk.bold(labelFn(`${report.score} / 10`))}  ${labelFn(`[${report.label}]`)}`);
-  console.log(`  ${chalk.dim(report.summary)}\n`);
+  console.log(`  ${theme.muted(report.summary)}\n`);
 
   // ── Risky Files table ────────────────────────────────────────────────────────
   if (report.files && report.files.length > 0) {
-    console.log(chalk.bold('Risky Files'));
+    console.log(theme.heading('Risky Files'));
 
     const table = new Table({
       head: [
-        chalk.bold.white('File'),
-        chalk.bold.white('Risk'),
-        chalk.bold.white('Legibility'),
-        chalk.bold.white('Consequence'),
+        theme.heading('File'),
+        theme.heading('Risk'),
+        theme.heading('Legibility'),
+        theme.heading('Consequence'),
       ],
       colWidths: [36, 12, 12, 48],
       wordWrap: true,
@@ -409,10 +400,10 @@ function printReport(report: HealthReport, root: string, fileCount: number, acti
 
     for (const f of report.files) {
       table.push([
-        chalk.cyan(f.path),
+        theme.file(f.path),
         riskColor(f.risk),
         legibilityColor(f.legibility),
-        chalk.dim(f.consequence),
+        theme.muted(f.consequence),
       ]);
     }
 
@@ -422,36 +413,36 @@ function printReport(report: HealthReport, root: string, fileCount: number, acti
 
   // ── Observations ─────────────────────────────────────────────────────────────
   if (report.observations && report.observations.length > 0) {
-    console.log(chalk.bold('Observations'));
+    console.log(theme.heading('Observations'));
     report.observations.forEach((obs, i) => {
-      console.log(`  ${chalk.dim(`${i + 1}.`)} ${obs}`);
+      console.log(`  ${theme.muted(`${i + 1}.`)} ${theme.text(obs)}`);
     });
     console.log('');
   }
 
   // ── Suggested Actions ─────────────────────────────────────────────────────────
   if (report.actions && report.actions.length > 0) {
-    console.log(chalk.bold('Suggested Actions'));
+    console.log(theme.heading('Suggested Actions'));
     report.actions.forEach((item, i) => {
-      console.log(`  ${chalk.white.bold(`${i + 1}.`)} ${item.instruction}`);
-      console.log(`     ${chalk.dim(item.rationale)}`);
+      console.log(`  ${theme.heading(`${i + 1}.`)} ${theme.text(item.instruction)}`);
+      console.log(`     ${theme.muted(item.rationale)}`);
     });
     console.log('');
   }
 
   // ── Start Here ────────────────────────────────────────────────────────────────
   if (report.start) {
-    const box = boxen(chalk.bold.white('Where to start\n\n') + report.start, {
+    const box = boxen(theme.heading('Where to start\n\n') + theme.text(report.start), {
       padding: { top: 0, bottom: 0, left: 2, right: 2 },
       borderStyle: 'round',
-      borderColor: 'yellow',
+      borderColor: '#F59E0B',
       dimBorder: false,
     });
     console.log(box);
     console.log('');
   }
 
-  console.log(chalk.bold.white('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
+  console.log(theme.divider('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
 }
 
 function printShipReadinessReport(report: HealthReport, root: string, fileCount: number): void {
@@ -461,40 +452,40 @@ function printShipReadinessReport(report: HealthReport, root: string, fileCount:
   const datetime = `${date}, ${time}`;
   const verdict = shipAnswer(report);
 
-  console.log(chalk.bold.white('━━━  ZENOAI — SHIP READINESS REPORT  ━━━'));
-  console.log(chalk.dim(`Project     : ${basename(root)}`));
-  console.log(chalk.dim('Reviewed by : Engineering Manager'));
-  console.log(chalk.dim(`Files       : ${fileCount}`));
-  console.log(chalk.dim(`Date        : ${datetime}\n`));
+  console.log(theme.title('━━━  ZENOAI — SHIP READINESS REPORT  ━━━'));
+  console.log(theme.muted(`Project     : ${basename(root)}`));
+  console.log(theme.muted('Reviewed by : Engineering Manager'));
+  console.log(theme.muted(`Files       : ${fileCount}`));
+  console.log(theme.muted(`Date        : ${datetime}\n`));
 
-  console.log(chalk.dim('Is this code safe to ship?'));
+  console.log(theme.muted('Is this code safe to ship?'));
   console.log(`${chalk.bold(verdict.color(verdict.answer))}  ${verdict.color(`[${verdict.risk}]`)}`);
   console.log('');
 
-  console.log(chalk.bold('Why'));
-  console.log(`  ${chalk.dim(report.summary)}\n`);
+  console.log(theme.heading('Why'));
+  console.log(`  ${theme.muted(report.summary)}\n`);
 
   if (report.files && report.files.length > 0) {
-    console.log(chalk.bold('What is blocking shipment'));
+    console.log(theme.heading('What is blocking shipment'));
     report.files.slice(0, 3).forEach((file, index) => {
-      console.log(`  ${chalk.white.bold(`${index + 1}.`)} ${chalk.cyan(file.path)} ${riskColor(file.risk)}`);
-      console.log(`     ${chalk.dim(file.consequence)}`);
+      console.log(`  ${theme.heading(`${index + 1}.`)} ${theme.file(file.path)} ${riskColor(file.risk)}`);
+      console.log(`     ${theme.muted(file.consequence)}`);
     });
     console.log('');
   }
 
   if (report.start) {
-    console.log(chalk.bold('Safest next step'));
-    console.log(`  ${report.start}\n`);
+    console.log(theme.heading('Safest next step'));
+    console.log(`  ${theme.text(report.start)}\n`);
   }
 
-  console.log(chalk.bold.white('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
+  console.log(theme.divider('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
 }
 
 function legibilityColor(score: number): string {
-  if (score >= 8) return chalk.green(String(score));
-  if (score >= 5) return chalk.yellow(String(score));
-  return chalk.red(String(score));
+  if (score >= 8) return theme.success(String(score));
+  if (score >= 5) return chalk.hex('#FBBF24')(String(score));
+  return theme.danger(String(score));
 }
 
 function printNoStrongTargetsMessage(
@@ -660,7 +651,7 @@ export async function runPhase2(
   // [COST_DISPLAY] — comment out this entire block when subscription model is active
   const estimatedCost = (plan.selectedFiles.length * 0.18).toFixed(2);
 
-  console.log(chalk.cyan('\nFiles selected for refactoring:'));
+  console.log(theme.info('\nFiles selected for refactoring:'));
   plan.selectedFiles.forEach((f, i) => {
     console.log(chalk.white(`  ${i + 1}. ${f}`));
   });
@@ -772,7 +763,7 @@ export async function runSplit(
   }
 
   const target = candidates[0];
-  console.log(chalk.cyan('\nStarting with:'));
+  console.log(theme.info('\nStarting with:'));
   console.log(chalk.white(`  ${target.path} (${target.lines} lines, ${target.functions} functions)`));
   if (candidates.length > 1) {
     console.log(chalk.dim(`  ${candidates.length - 1} more large file${candidates.length === 2 ? '' : 's'} can be handled in later runs.`));

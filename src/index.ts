@@ -11,6 +11,7 @@ import { runOrchestrator, runPhase2, runSplit } from './core/orchestrator.js';
 import { clearCachedReport, loadReport } from './core/cache.js';
 import { generateHtml } from './core/htmlExporter.js';
 import { resetHistory } from './core/history.js';
+import { theme } from './core/theme.js';
 
 const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
 
@@ -34,10 +35,10 @@ const ZENO_ACTIONS = [
 ] as const;
 
 function printHelp(): void {
-  console.log(chalk.bold.white(`Zeno v${version}`));
-  console.log(chalk.dim('AI-assisted codebase review and safe refactor judgment.\n'));
+  console.log(theme.title(`Zeno v${version}`));
+  console.log(theme.muted('AI-assisted codebase review and safe refactor judgment.\n'));
 
-  console.log(chalk.bold('Usage'));
+  console.log(theme.heading('Usage'));
   console.log('  npx zenoai                 Run Zeno in the current project');
   console.log('  npx zenoai help            Show this help');
   console.log('  npx zenoai reset           Remove saved API provider/key');
@@ -46,12 +47,12 @@ function printHelp(): void {
   console.log('  npx zenoai --export        Export cached report as HTML');
   console.log('  npx zenoai --output <file> Export cached report to a specific HTML file\n');
 
-  console.log(chalk.bold('Files Zeno Uses'));
-  console.log(chalk.dim('  ~/.zenoai/config.json       Saved provider and API key'));
-  console.log(chalk.dim('  ~/.zenoai/last-report.json  Last report cache'));
-  console.log(chalk.dim('  .zeno-history.json          Project refactor history\n'));
+  console.log(theme.heading('Files Zeno Uses'));
+  console.log(theme.muted('  ~/.zenoai/config.json       Saved provider and API key'));
+  console.log(theme.muted('  ~/.zenoai/last-report.json  Last report cache'));
+  console.log(theme.muted('  .zeno-history.json          Project refactor history\n'));
 
-  console.log(chalk.bold('Common Fixes'));
+  console.log(theme.heading('Common Fixes'));
   console.log('  API key rejected?     Run `npx zenoai reset`');
   console.log('  Refactor skipped?     Run `npx zenoai reset-history` from the project root');
   console.log('  Export looks stale?   Run `npx zenoai clear-report`');
@@ -108,9 +109,9 @@ async function main() {
   if (command === 'reset') {
     const removed = await resetConfig();
     if (removed) {
-      console.log(chalk.green('Saved API key removed. Run `npx zenoai` to enter a new one.'));
+      console.log(theme.success('Saved API key removed. Run `npx zenoai` to enter a new one.'));
     } else {
-      console.log(chalk.yellow('No saved API key found. Run `npx zenoai` to set one up.'));
+      console.log(theme.caution('No saved API key found. Run `npx zenoai` to set one up.'));
     }
     process.exit(0);
   }
@@ -118,9 +119,9 @@ async function main() {
   if (command === 'reset-history') {
     const removed = await resetHistory(process.cwd());
     if (removed) {
-      console.log(chalk.green('Project refactor history removed from .zeno-history.json.'));
+      console.log(theme.success('Project refactor history removed from .zeno-history.json.'));
     } else {
-      console.log(chalk.yellow('No project refactor history found in this directory.'));
+      console.log(theme.caution('No project refactor history found in this directory.'));
     }
     process.exit(0);
   }
@@ -128,9 +129,9 @@ async function main() {
   if (command === 'clear-report') {
     const removed = await clearCachedReport();
     if (removed) {
-      console.log(chalk.green('Cached last report removed from ~/.zenoai/last-report.json.'));
+      console.log(theme.success('Cached last report removed from ~/.zenoai/last-report.json.'));
     } else {
-      console.log(chalk.yellow('No cached last report found.'));
+      console.log(theme.caution('No cached last report found.'));
     }
     process.exit(0);
   }
@@ -139,7 +140,7 @@ async function main() {
   if (exportHtml || outputPath) {
     const cached = await loadReport();
     if (!cached) {
-      console.error(chalk.red('No report found. Run `zenoai` first to generate a report.'));
+      console.error(theme.danger('No report found. Run `zenoai` first to generate a report.'));
       process.exit(1);
     }
     let dest: string;
@@ -158,7 +159,7 @@ async function main() {
     }
     const html = generateHtml(cached.report, cached.root, cached.fileCount);
     await writeFile(dest, html, 'utf8');
-    console.log(chalk.green(`Report exported → ${dest}`));
+    console.log(theme.success(`Report exported → ${dest}`));
     const opener = process.platform === 'darwin' ? 'open'
                  : process.platform === 'win32'  ? 'start ""'
                  : 'xdg-open';
@@ -196,12 +197,12 @@ async function main() {
  ░██       ░██        ░██    ░██ ░██    ░██
 ░█████████  ░███████  ░██    ░██  ░███████  `;
 
-  console.log('\n\n' + chalk.hex('#F8F8F2')(banner));
+  console.log('\n\n' + theme.title(banner));
   console.log('');
   console.log('');
-  // console.log(chalk.hex('#F8F8F2')('Drop a senior engineer into any codebase.'));
-  console.log(chalk.hex('#F8F8F2')(`💎 Zeno v${version}`));
-  console.log(chalk.hex('#6272A4')(quote));
+  // console.log(theme.text('Drop a senior engineer into any codebase.'));
+  console.log(theme.title(`💎 Zeno v${version}`));
+  console.log(theme.muted(quote));
   console.log('');
 
   const guardSpinner = ora({ text: 'Checking project directory...', color: 'cyan' }).start();
@@ -213,16 +214,16 @@ async function main() {
 
   if (guardResult.status === 'dangerous-path') {
     guardSpinner.fail('Not a project directory.');
-    console.log(chalk.red('\n⚠  Zeno must be run from inside a project directory.'));
-    console.log(chalk.red('   Current directory: ' + guardResult.cwd));
-    console.log(chalk.red('   Navigate to your project root and try again.\n'));
+    console.log(theme.danger('\n⚠  Zeno must be run from inside a project directory.'));
+    console.log(theme.danger('   Current directory: ' + guardResult.cwd));
+    console.log(theme.danger('   Navigate to your project root and try again.\n'));
     process.exit(1);
   }
 
   if (guardResult.status === 'no-package-json') {
     guardSpinner.fail('No package.json found.');
-    console.log(chalk.yellow('\n⚠  No package.json found in this directory.'));
-    console.log(chalk.yellow('   Zeno works best when run from your project root.'));
+    console.log(theme.caution('\n⚠  No package.json found in this directory.'));
+    console.log(theme.caution('   Zeno works best when run from your project root.'));
     const proceed = await confirm({ message: 'Continue anyway?', default: false });
     if (!proceed) process.exit(1);
     console.log('');
@@ -231,7 +232,7 @@ async function main() {
   guardSpinner.stop();
 
   if (guardResult.status === 'ok' && guardResult.selfRun) {
-    console.log(chalk.yellow('⚠  You are running Zeno on its own codebase. Results may be less useful.\n'));
+    console.log(theme.caution('⚠  You are running Zeno on its own codebase. Results may be less useful.\n'));
   }
 
   const config = await ensureConfig();
