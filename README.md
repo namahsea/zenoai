@@ -139,7 +139,7 @@ Your key is saved to `~/.zenoai/config.json` on first run.
 ## 🔁 Reset Your API Key
 
 ```bash
-rm ~/.zenoai/config.json
+npx zenoai reset
 npx zenoai
 ```
 

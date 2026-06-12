@@ -259,7 +259,8 @@ export async function runOrchestrator(opts: RunOptions): Promise<void> {
       let hasPkgJson = false;
       try { await access(join(root, 'package.json')); hasPkgJson = true; } catch { /* not found */ }
       if (hasPkgJson) {
-        console.log(chalk.hex('#FFA500')(`Warning: only ${files.length} file${files.length === 1 ? '' : 's'} found — this may be incomplete. Make sure you are running zenoai from your project root.\n`));
+        console.log(chalk.hex('#FFA500')(`Warning: Zeno found only ${files.length} JavaScript/TypeScript source file${files.length === 1 ? '' : 's'} to review.`));
+        console.log(chalk.hex('#FFA500')('If this is a small app or landing page, that may be expected. Otherwise, check that your source files use .js, .jsx, .ts, or .tsx and are not inside ignored build folders.\n'));
       }
     }
 
@@ -332,7 +333,11 @@ export async function runOrchestrator(opts: RunOptions): Promise<void> {
       if (lower.includes('credit balance') || lower.includes('400')) {
         console.error(chalk.red('Your API key has no credits. Top up your account at the provider and try again.'));
       } else if (lower.includes('invalid') || lower.includes('401')) {
-        console.error(chalk.red('Your API key looks incorrect. Run zenoai reset to enter a new one.'));
+        if (opts.config.source === 'saved') {
+          console.error(chalk.red(`The saved ${opts.config.provider} API key was rejected. Run \`npx zenoai reset\` to enter a new one.`));
+        } else {
+          console.error(chalk.red('Your API key looks incorrect. Run `npx zenoai reset` to enter a new one.'));
+        }
       } else if (lower.includes('429')) {
         console.error(chalk.red('You have hit the rate limit. Wait a moment and try again.'));
       } else {

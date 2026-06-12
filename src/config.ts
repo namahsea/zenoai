@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { select, input } from '@inquirer/prompts';
@@ -12,6 +12,7 @@ export type Provider = 'anthropic' | 'gemini' | 'openrouter' | 'openai';
 export interface ZenoConfig {
   provider: Provider;
   apiKey: string;
+  source?: 'saved' | 'new';
 }
 
 async function readConfig(): Promise<ZenoConfig | null> {
@@ -23,7 +24,7 @@ async function readConfig(): Promise<ZenoConfig | null> {
       ['anthropic', 'gemini', 'openrouter', 'openai'].includes(parsed.provider) &&
       parsed.apiKey?.trim()
     ) {
-      return { provider: parsed.provider, apiKey: parsed.apiKey.trim() };
+      return { provider: parsed.provider, apiKey: parsed.apiKey.trim(), source: 'saved' };
     }
     return null;
   } catch {
@@ -34,6 +35,18 @@ async function readConfig(): Promise<ZenoConfig | null> {
 async function saveConfig(config: ZenoConfig): Promise<void> {
   await mkdir(CONFIG_DIR, { recursive: true });
   await writeFile(CONFIG_PATH, JSON.stringify(config, null, 2), { mode: 0o600 });
+}
+
+export async function resetConfig(): Promise<boolean> {
+  try {
+    await rm(CONFIG_PATH);
+    return true;
+  } catch (err) {
+    if (err instanceof Error && 'code' in err && err.code === 'ENOENT') {
+      return false;
+    }
+    throw err;
+  }
 }
 
 const PROVIDER_LABELS: Record<Provider, string> = {
@@ -99,7 +112,7 @@ export async function ensureConfig(): Promise<ZenoConfig> {
     transformer: (value) => '*'.repeat(value.length),
   });
 
-  const config: ZenoConfig = { provider, apiKey: apiKey.trim() };
+  const config: ZenoConfig = { provider, apiKey: apiKey.trim(), source: 'new' };
   await saveConfig(config);
   console.log(chalk.green('\n  Config saved to ~/.zenoai/config.json\n'));
 

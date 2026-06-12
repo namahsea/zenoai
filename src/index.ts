@@ -1,12 +1,12 @@
-import { select, confirm } from '@inquirer/prompts';
+import { select } from '@inquirer/prompts';
 import chalk from 'chalk';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { writeFile, mkdir } from 'node:fs/promises';
 import os from 'node:os';
-import { resolve, basename, join, sep } from 'node:path';
+import { resolve, basename, dirname, join, relative, sep } from 'node:path';
 import { exec } from 'node:child_process';
 import ora from 'ora';
-import { ensureConfig } from './config.js';
+import { ensureConfig, resetConfig } from './config.js';
 import { runOrchestrator, runPhase2, runSplit } from './core/orchestrator.js';
 import { loadReport } from './core/cache.js';
 import { generateHtml } from './core/htmlExporter.js';
@@ -35,7 +35,50 @@ const ZENO_ACTIONS = [
 type GuardResult =
   | { status: 'ok'; selfRun: boolean }
   | { status: 'dangerous-path'; cwd: string }
-  | { status: 'no-package-json' };
+  | { status: 'no-package-json'; nestedPackageJsons: string[] };
+
+const NESTED_PROJECT_SEARCH_DEPTH = 3;
+const IGNORED_NESTED_PROJECT_DIRS = new Set([
+  '.git',
+  '.next',
+  '.turbo',
+  'build',
+  'coverage',
+  'dist',
+  'node_modules',
+  'out',
+]);
+
+function findNestedPackageJsons(root: string, maxDepth = NESTED_PROJECT_SEARCH_DEPTH): string[] {
+  const found: string[] = [];
+
+  function walk(dir: string, depth: number): void {
+    if (depth > maxDepth) return;
+
+    let entries;
+    try {
+      entries = readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
+
+    for (const entry of entries) {
+      if (!entry.isDirectory() || IGNORED_NESTED_PROJECT_DIRS.has(entry.name)) continue;
+
+      const childDir = join(dir, entry.name);
+      const packageJsonPath = join(childDir, 'package.json');
+      if (existsSync(packageJsonPath)) {
+        found.push(relative(root, packageJsonPath));
+        continue;
+      }
+
+      walk(childDir, depth + 1);
+    }
+  }
+
+  walk(root, 1);
+  return found.slice(0, 5);
+}
 
 function checkProjectDirectory(): GuardResult {
   const cwd = process.cwd();
@@ -54,7 +97,7 @@ function checkProjectDirectory(): GuardResult {
 
   const pkgJsonPath = join(cwd, 'package.json');
   if (!existsSync(pkgJsonPath) && !existsSync(join(cwd, '..', 'package.json'))) {
-    return { status: 'no-package-json' };
+    return { status: 'no-package-json', nestedPackageJsons: findNestedPackageJsons(cwd) };
   }
 
   let selfRun = false;
@@ -70,9 +113,20 @@ function checkProjectDirectory(): GuardResult {
 
 async function main() {
   const args = process.argv.slice(2);
+  const resetRequested = args.includes('reset') || args.includes('--reset');
   const exportHtml = args.includes('--export');
   const outputIdx = args.indexOf('--output');
   const outputPath = outputIdx !== -1 ? args[outputIdx + 1] : undefined;
+
+  if (resetRequested) {
+    const removed = await resetConfig();
+    if (removed) {
+      console.log(chalk.green('Saved API key removed. Run `npx zenoai` to enter a new one.'));
+    } else {
+      console.log(chalk.yellow('No saved API key found. Run `npx zenoai` to set one up.'));
+    }
+    process.exit(0);
+  }
 
   // Export mode — load cached report, write HTML, exit. No prompts, no API call.
   if (exportHtml || outputPath) {
@@ -160,11 +214,29 @@ async function main() {
 
   if (guardResult.status === 'no-package-json') {
     guardSpinner.fail('No package.json found.');
-    console.log(chalk.yellow('\n⚠  No package.json found in this directory.'));
-    console.log(chalk.yellow('   Zeno works best when run from your project root.'));
-    const proceed = await confirm({ message: 'Continue anyway?', default: false });
-    if (!proceed) process.exit(1);
-    console.log('');
+    console.log(chalk.red('\n⚠  Zeno must be run from inside a JavaScript or TypeScript project.'));
+    console.log(chalk.red('   No package.json found in this directory or its parent.'));
+
+    if (guardResult.nestedPackageJsons.length === 1) {
+      const nestedPackageJson = guardResult.nestedPackageJsons[0];
+      const nestedProjectDir = dirname(nestedPackageJson);
+      console.log(chalk.yellow('\n   Zeno found a project folder inside this directory:'));
+      console.log(chalk.yellow(`   ${nestedPackageJson}`));
+      console.log(chalk.yellow('\n   You appear to be one folder above the actual project.'));
+      console.log(chalk.yellow('   Run Zeno from that project folder instead:'));
+      console.log(chalk.cyan(`\n   cd ${nestedProjectDir}`));
+      console.log(chalk.cyan('   npx zenoai\n'));
+    } else if (guardResult.nestedPackageJsons.length > 1) {
+      console.log(chalk.yellow('\n   Zeno found multiple project folders inside this directory:'));
+      for (const nestedPackageJson of guardResult.nestedPackageJsons) {
+        console.log(chalk.yellow(`   - ${nestedPackageJson}`));
+      }
+      console.log(chalk.yellow('\n   Choose the project you want to review, then run Zeno from that folder.\n'));
+    } else {
+      console.log(chalk.red('   Navigate to your project root and try again.\n'));
+    }
+
+    process.exit(1);
   }
 
   guardSpinner.stop();
@@ -174,6 +246,9 @@ async function main() {
   }
 
   const config = await ensureConfig();
+  if (config.source === 'saved') {
+    console.log(chalk.dim(`Using saved ${config.provider} API key from ~/.zenoai/config.json\n`));
+  }
 
   const projectName = basename(process.cwd());
   const action = await select({
