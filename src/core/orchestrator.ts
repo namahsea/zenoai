@@ -259,8 +259,8 @@ export async function runOrchestrator(opts: RunOptions): Promise<void> {
       let hasPkgJson = false;
       try { await access(join(root, 'package.json')); hasPkgJson = true; } catch { /* not found */ }
       if (hasPkgJson) {
-        console.log(chalk.hex('#FFA500')(`Warning: Zeno found only ${files.length} JavaScript/TypeScript source file${files.length === 1 ? '' : 's'} to review.`));
-        console.log(chalk.hex('#FFA500')('If this is a small app or landing page, that may be expected. Otherwise, check that your source files use .js, .jsx, .ts, or .tsx and are not inside ignored build folders.\n'));
+        console.log(chalk.cyan(`Note: Zeno found ${files.length} JavaScript/TypeScript source file${files.length === 1 ? '' : 's'} to review.`));
+        console.log(chalk.dim('  For small apps or landing pages, that may be expected.\n'));
       }
     }
 
