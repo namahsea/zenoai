@@ -6,10 +6,11 @@ import os from 'node:os';
 import { resolve, basename, join, sep } from 'node:path';
 import { exec } from 'node:child_process';
 import ora from 'ora';
-import { ensureConfig } from './config.js';
+import { ensureConfig, resetConfig } from './config.js';
 import { runOrchestrator, runPhase2, runSplit } from './core/orchestrator.js';
-import { loadReport } from './core/cache.js';
+import { clearCachedReport, loadReport } from './core/cache.js';
 import { generateHtml } from './core/htmlExporter.js';
+import { resetHistory } from './core/history.js';
 
 const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
 
@@ -31,6 +32,30 @@ const ZENO_ACTIONS = [
     description: 'Finds obvious security risks before launch.',
   },
 ] as const;
+
+function printHelp(): void {
+  console.log(chalk.bold.white(`Zeno v${version}`));
+  console.log(chalk.dim('AI-assisted codebase review and safe refactor judgment.\n'));
+
+  console.log(chalk.bold('Usage'));
+  console.log('  npx zenoai                 Run Zeno in the current project');
+  console.log('  npx zenoai help            Show this help');
+  console.log('  npx zenoai reset           Remove saved API provider/key');
+  console.log("  npx zenoai reset-history   Remove this project's Zeno refactor history");
+  console.log('  npx zenoai clear-report    Remove cached last report');
+  console.log('  npx zenoai --export        Export cached report as HTML');
+  console.log('  npx zenoai --output <file> Export cached report to a specific HTML file\n');
+
+  console.log(chalk.bold('Files Zeno Uses'));
+  console.log(chalk.dim('  ~/.zenoai/config.json       Saved provider and API key'));
+  console.log(chalk.dim('  ~/.zenoai/last-report.json  Last report cache'));
+  console.log(chalk.dim('  .zeno-history.json          Project refactor history\n'));
+
+  console.log(chalk.bold('Common Fixes'));
+  console.log('  API key rejected?     Run `npx zenoai reset`');
+  console.log('  Refactor skipped?     Run `npx zenoai reset-history` from the project root');
+  console.log('  Export looks stale?   Run `npx zenoai clear-report`');
+}
 
 type GuardResult =
   | { status: 'ok'; selfRun: boolean }
@@ -70,9 +95,45 @@ function checkProjectDirectory(): GuardResult {
 
 async function main() {
   const args = process.argv.slice(2);
+  const command = args[0];
   const exportHtml = args.includes('--export');
   const outputIdx = args.indexOf('--output');
   const outputPath = outputIdx !== -1 ? args[outputIdx + 1] : undefined;
+
+  if (command === 'help' || command === '--help' || command === '-h') {
+    printHelp();
+    process.exit(0);
+  }
+
+  if (command === 'reset') {
+    const removed = await resetConfig();
+    if (removed) {
+      console.log(chalk.green('Saved API key removed. Run `npx zenoai` to enter a new one.'));
+    } else {
+      console.log(chalk.yellow('No saved API key found. Run `npx zenoai` to set one up.'));
+    }
+    process.exit(0);
+  }
+
+  if (command === 'reset-history') {
+    const removed = await resetHistory(process.cwd());
+    if (removed) {
+      console.log(chalk.green('Project refactor history removed from .zeno-history.json.'));
+    } else {
+      console.log(chalk.yellow('No project refactor history found in this directory.'));
+    }
+    process.exit(0);
+  }
+
+  if (command === 'clear-report') {
+    const removed = await clearCachedReport();
+    if (removed) {
+      console.log(chalk.green('Cached last report removed from ~/.zenoai/last-report.json.'));
+    } else {
+      console.log(chalk.yellow('No cached last report found.'));
+    }
+    process.exit(0);
+  }
 
   // Export mode — load cached report, write HTML, exit. No prompts, no API call.
   if (exportHtml || outputPath) {

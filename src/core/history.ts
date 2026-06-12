@@ -1,4 +1,4 @@
-import { readFile, writeFile, appendFile } from 'node:fs/promises';
+import { readFile, writeFile, appendFile, rm } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 
 export interface RefactorHistory {
@@ -91,4 +91,16 @@ export async function getRefactoredPaths(
   history.actions[action] ??= { accepted: [], skipped: [] };
   const bucket = history.actions[action];
   return new Set([...bucket.accepted, ...bucket.skipped.map(s => s.path)]);
+}
+
+export async function resetHistory(projectRoot: string): Promise<boolean> {
+  try {
+    await rm(join(projectRoot, HISTORY_FILENAME));
+    return true;
+  } catch (err) {
+    if (err instanceof Error && 'code' in err && err.code === 'ENOENT') {
+      return false;
+    }
+    throw err;
+  }
 }

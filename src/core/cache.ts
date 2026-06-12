@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import type { HealthReport } from '../types.js';
@@ -25,5 +25,17 @@ export async function loadReport(): Promise<CachedReport | null> {
     return JSON.parse(raw) as CachedReport;
   } catch {
     return null;
+  }
+}
+
+export async function clearCachedReport(): Promise<boolean> {
+  try {
+    await rm(CACHE_PATH);
+    return true;
+  } catch (err) {
+    if (err instanceof Error && 'code' in err && err.code === 'ENOENT') {
+      return false;
+    }
+    throw err;
   }
 }

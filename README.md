@@ -139,9 +139,25 @@ Your key is saved to `~/.zenoai/config.json` on first run.
 ## 🔁 Reset Your API Key
 
 ```bash
-rm ~/.zenoai/config.json
+npx zenoai reset
 npx zenoai
 ```
+
+
+## 🆘 Help & Maintenance
+
+```bash
+npx zenoai help
+```
+
+| Command | What it does |
+|---------|--------------|
+| `npx zenoai` | Run Zeno in the current project |
+| `npx zenoai help` | Show available commands |
+| `npx zenoai reset` | Remove saved API provider/key |
+| `npx zenoai reset-history` | Remove this project's `.zeno-history.json` |
+| `npx zenoai clear-report` | Remove cached last report |
+| `npx zenoai --export` | Export cached report as HTML |
 
 
 ## 🗺️ Roadmap
