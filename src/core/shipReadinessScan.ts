@@ -21,6 +21,15 @@ export interface SourceFinding {
   evidence: string;
 }
 
+export interface LaunchFinding {
+  category: 'hard_blocker_candidate' | 'soft_blocker' | 'code_ownership_risk';
+  issue: string;
+  severity: 'Critical' | 'High' | 'Medium' | 'Low';
+  certainty: 'confirmed' | 'likely' | 'needs_verification' | 'inferred';
+  evidence: string;
+  suggestedFix: string;
+}
+
 export interface ShipReadinessScan {
   projectType: ProjectType;
   package: PackageScan;
@@ -53,6 +62,7 @@ export interface ShipReadinessScan {
   missingAltText: SourceFinding[];
   reducedMotion: SourceFinding[];
   riskyFiles: SourceFinding[];
+  launchFindings: LaunchFinding[];
   evidence: string[];
 }
 
@@ -199,6 +209,100 @@ function buildEvidence(scan: Omit<ShipReadinessScan, 'projectType' | 'evidence'>
   return evidence;
 }
 
+function buildLaunchFindings(scan: Omit<ShipReadinessScan, 'projectType' | 'evidence' | 'launchFindings'>): LaunchFinding[] {
+  const findings: LaunchFinding[] = [];
+
+  for (const form of scan.suspiciousForms.slice(0, 3)) {
+    findings.push({
+      category: 'hard_blocker_candidate',
+      issue: 'Waitlist/form appears unwired',
+      severity: 'High',
+      certainty: form.evidence.includes('local-only') ? 'likely' : 'needs_verification',
+      evidence: `${form.path}: ${form.evidence}`,
+      suggestedFix: 'Wire the form to an API route, database, email platform, server action, or disable the CTA before launch.',
+    });
+  }
+
+  for (const button of scan.suspiciousButtons.slice(0, 3)) {
+    findings.push({
+      category: 'hard_blocker_candidate',
+      issue: 'Primary CTA behavior needs verification',
+      severity: 'High',
+      certainty: 'needs_verification',
+      evidence: `${button.path}: ${button.evidence}`,
+      suggestedFix: 'Confirm the button either submits a real form, navigates to a real destination, or is disabled/labelled before launch.',
+    });
+  }
+
+  if (!scan.metadata.hasOpenGraph || !scan.metadata.hasTwitter) {
+    findings.push({
+      category: 'soft_blocker',
+      issue: 'Missing OG/social metadata',
+      severity: 'Medium',
+      certainty: 'confirmed',
+      evidence: `Metadata scan: openGraph=${scan.metadata.hasOpenGraph ? 'yes' : 'no'}, twitter=${scan.metadata.hasTwitter ? 'yes' : 'no'}.`,
+      suggestedFix: 'Add Open Graph and Twitter metadata before public/social launch.',
+    });
+  }
+
+  if (scan.analytics.length === 0) {
+    findings.push({
+      category: 'soft_blocker',
+      issue: 'No analytics detected',
+      severity: 'Medium',
+      certainty: 'confirmed',
+      evidence: 'No common analytics signal was detected in source files.',
+      suggestedFix: 'Add analytics before public launch or paid traffic so visits and conversions are measurable.',
+    });
+  }
+
+  if (!scan.publicFiles.hasRobotsTxt || !scan.publicFiles.hasSitemap) {
+    findings.push({
+      category: 'soft_blocker',
+      issue: 'robots.txt or sitemap missing',
+      severity: 'Low',
+      certainty: 'confirmed',
+      evidence: `robots.txt=${scan.publicFiles.hasRobotsTxt ? 'yes' : 'no'}, sitemap=${scan.publicFiles.hasSitemap ? 'yes' : 'no'}.`,
+      suggestedFix: 'Add robots.txt and sitemap.xml when preparing for public indexing.',
+    });
+  }
+
+  if (scan.heavyAssets.length > 0) {
+    findings.push({
+      category: 'soft_blocker',
+      issue: 'Heavy media or animation needs performance QA',
+      severity: 'Medium',
+      certainty: 'inferred',
+      evidence: `${scan.heavyAssets.length} heavy media/animation signal(s) detected.`,
+      suggestedFix: 'Run mobile/performance QA and optimize media before public launch.',
+    });
+  }
+
+  if (!scan.package.hasTestScript || scan.testFiles.length === 0) {
+    findings.push({
+      category: 'code_ownership_risk',
+      issue: 'No test safety net detected',
+      severity: 'Low',
+      certainty: 'confirmed',
+      evidence: `test script=${scan.package.hasTestScript ? 'yes' : 'no'}, test files=${scan.testFiles.length}.`,
+      suggestedFix: 'Add focused tests around the highest-risk form, API, auth, payment, or stateful behavior before refactoring.',
+    });
+  }
+
+  for (const file of scan.largestFiles.filter(file => file.lines >= 500).slice(0, 3)) {
+    findings.push({
+      category: 'code_ownership_risk',
+      issue: `${file.path} is a large file`,
+      severity: 'Medium',
+      certainty: 'confirmed',
+      evidence: `${file.path}: ${file.lines} lines, ${file.functions} functions.`,
+      suggestedFix: 'Do not refactor first if launch paths are broken; later split by behavior after the page can ship safely.',
+    });
+  }
+
+  return findings.slice(0, 12);
+}
+
 export async function runShipReadinessScan(root: string, reports: FileReport[]): Promise<ShipReadinessScan> {
   const packageScan = await readPackage(root);
   const sourceFiles = collectSourceFiles(root);
@@ -308,7 +412,7 @@ export async function runShipReadinessScan(root: string, reports: FileReport[]):
     .slice(0, 5)
     .map(report => ({ path: report.path, lines: report.lines, functions: report.functions }));
 
-  const baseScan = {
+  const baseScanWithoutFindings = {
     package: packageScan,
     testFiles,
     routeFiles,
@@ -331,6 +435,12 @@ export async function runShipReadinessScan(root: string, reports: FileReport[]):
     missingAltText,
     reducedMotion,
     riskyFiles,
+  };
+
+  const launchFindings = buildLaunchFindings(baseScanWithoutFindings);
+  const baseScan = {
+    ...baseScanWithoutFindings,
+    launchFindings,
   };
 
   const projectType = inferProjectType(baseScan);

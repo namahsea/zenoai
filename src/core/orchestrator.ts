@@ -106,7 +106,8 @@ Use exactly this structure:
       "evidence": <specific scan evidence or file reference>,
       "risk": <what breaks for real users or production>,
       "suggestedFix": <smallest practical fix>,
-      "severity": <one of: "Critical" | "High" | "Medium" | "Low">
+      "severity": <one of: "Critical" | "High" | "Medium" | "Low">,
+      "certainty": <one of: "confirmed" | "likely" | "needs_verification" | "inferred">
     }
   ],
   "softBlockers": [
@@ -115,7 +116,8 @@ Use exactly this structure:
       "evidence": <specific scan evidence or file reference>,
       "risk": <launch quality risk>,
       "suggestedFix": <smallest practical fix>,
-      "severity": <one of: "Critical" | "High" | "Medium" | "Low">
+      "severity": <one of: "Critical" | "High" | "Medium" | "Low">,
+      "certainty": <one of: "confirmed" | "likely" | "needs_verification" | "inferred">
     }
   ],
   "codeOwnershipRisks": [
@@ -124,7 +126,8 @@ Use exactly this structure:
       "evidence": <specific scan evidence or file reference>,
       "risk": <why future changes become risky>,
       "suggestedFix": <smallest practical fix>,
-      "severity": <one of: "Critical" | "High" | "Medium" | "Low">
+      "severity": <one of: "Critical" | "High" | "Medium" | "Low">,
+      "certainty": <one of: "confirmed" | "likely" | "needs_verification" | "inferred">
     }
   ],
   "evidence": [
@@ -150,21 +153,34 @@ Use exactly this structure:
 
 Rules:
 - The review is about launch readiness first, code health second.
-- Prioritise real user launch blockers before refactoring advice.
+- Prioritise real user-flow blockers before refactoring advice.
 - Do not recommend refactoring first if a main CTA, form, route, build/lint status, or payment/auth/data path is broken or unverified.
 - Every hardBlocker, softBlocker, and codeOwnershipRisk must cite evidence from the deterministic scan or file metadata.
+- The deterministic scan includes launchFindings with suggested category, severity, and certainty. Treat these as the default classification unless stronger evidence in the scan clearly contradicts them.
 - If something is inferred, say "appears" or "not detected" instead of claiming certainty.
+- Every issue must include a certainty value:
+  - confirmed: the deterministic scan directly proves it, such as missing metadata, missing robots.txt, no analytics detected, no tests detected, or a known script exists/missing.
+  - likely: evidence strongly suggests it, such as a form submit path where no action, API route, server action, fetch/axios, or integration was detected.
+  - needs_verification: suspicious code was found but behavior cannot be proven broken, such as a button without obvious onClick/href.
+  - inferred: risk is based on patterns, such as browser globals, heavy animation, or possible SSR/hydration risk.
 - For landing_page projects, prioritise CTA behavior, form submission, mobile readiness, metadata/social preview, analytics, performance, copy/brand consistency, and accessibility basics.
 - For saas_app, auth_app, ecommerce_payment_app, dashboard, or backend_api projects, prioritise auth, permissions, data writes, payment flow, webhooks, error states, tests, and security.
-- Hard blocker means real users cannot complete the main flow, production can break, or launch would be misleading or unsafe.
+- Hard blocker means real users cannot complete the main flow, production can break, or launch would be misleading or unsafe. Only use hardBlockers for: main user action broken or very likely broken; form appears unwired; primary CTA appears unwired; build/lint/test command fails if actually executed or known; page likely cannot render; required env/config missing; auth/payment/database/webhook/data-write risk; severe mobile breakage; broken route/navigation.
+- If a form is found and there is no clear submission behavior, include a first-class hardBlocker candidate: "Waitlist/form appears unwired" with severity High and certainty likely or needs_verification. Use risk text like: "Users may think they joined the waitlist, but their email is lost."
+- If suspicious buttons or CTAs are found but behavior is not proven broken, use wording like "Primary CTA behavior needs verification" or "Potentially unwired button". Do not say "CTA is broken" unless evidence proves it.
 - Soft blocker means launch quality is weaker but the main flow can still work.
+- Do not classify these as hardBlockers by default: missing OG/social metadata, no analytics, no robots.txt, no sitemap, no tests for a landing page, general performance concern without measured failure, or general accessibility gap.
+- For landing pages, classify missing OG/social metadata as a softBlocker, Medium, confirmed. Classify no analytics as a softBlocker, Medium, confirmed. Classify missing robots.txt or sitemap as a softBlocker, Low or Medium, confirmed. Classify no tests/no test script as a codeOwnershipRisk, Low, confirmed.
+- Only elevate metadata or analytics if the provided evidence explicitly says public social launch, paid traffic, or campaign tracking is required.
 - Code ownership risk means future changes become dangerous or expensive.
+- Do not put large files, no tests, browser globals, or mixed concerns in hardBlockers unless they directly break launch. These usually belong in codeOwnershipRisks.
 - Score/label mapping: 1-3 Critical, 4-5 Concerning, 6-7 Fair, 8-10 Good.
 - Keep lists concise: at most 5 hardBlockers, 5 softBlockers, 5 codeOwnershipRisks, and 6 evidence bullets.
+- Prefer moving a finding to softBlockers or codeOwnershipRisks over inflating severity. Precision is more important than sounding dramatic.
 - files should contain 1-5 highest-risk files. Do not invent files.
 - observations must contain exactly 3 items.
 - actions must contain exactly 3 items.
-- start must be the safest next step for launch readiness, not broad cleanup.`;
+- start must be the safest next step for launch readiness, not broad cleanup. For landing pages with suspicious forms/CTAs, the safest next step is to verify and wire the form/CTA path before refactoring.`;
 
 function modelForProvider(provider: ZenoConfig['provider']): string {
   return ZENO_MODELS[provider];
@@ -625,12 +641,23 @@ function printShipIssues(title: string, issues: HealthReport['hardBlockers']): v
 
   console.log(theme.heading(title));
   issues.slice(0, 5).forEach((item, index) => {
-    console.log(`  ${theme.heading(`${index + 1}.`)} ${theme.text(item.issue)} ${riskColor(item.severity)}`);
+    const certainty = item.certainty ? ` [${formatCertainty(item.certainty)}]` : '';
+    console.log(`  ${theme.heading(`${index + 1}.`)} ${theme.text(item.issue)} ${riskColor(item.severity)}${theme.muted(certainty)}`);
     console.log(`     ${theme.muted('Evidence:')} ${theme.muted(item.evidence)}`);
     console.log(`     ${theme.muted('Risk:')} ${theme.muted(item.risk)}`);
     console.log(`     ${theme.muted('Fix:')} ${theme.muted(item.suggestedFix)}`);
   });
   console.log('');
+}
+
+function formatCertainty(certainty: NonNullable<HealthReport['hardBlockers']>[number]['certainty']): string {
+  switch (certainty) {
+    case 'confirmed': return 'Confirmed';
+    case 'likely': return 'Likely';
+    case 'needs_verification': return 'Needs verification';
+    case 'inferred': return 'Inferred';
+    default: return '';
+  }
 }
 
 function legibilityColor(score: number): string {

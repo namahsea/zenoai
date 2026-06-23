@@ -31,6 +31,7 @@ export type ProjectType =
   | 'unknown';
 
 export type IssueSeverity = 'Critical' | 'High' | 'Medium' | 'Low';
+export type IssueCertainty = 'confirmed' | 'likely' | 'needs_verification' | 'inferred';
 
 export interface ShipReadinessIssue {
   issue: string;
@@ -38,6 +39,7 @@ export interface ShipReadinessIssue {
   risk: string;
   suggestedFix: string;
   severity: IssueSeverity;
+  certainty?: IssueCertainty;
 }
 
 export interface ShipReadinessDecision {
