@@ -1,16 +1,18 @@
 import { select, confirm } from '@inquirer/prompts';
 import chalk from 'chalk';
 import { existsSync, readFileSync } from 'node:fs';
-import { writeFile, mkdir } from 'node:fs/promises';
+import { writeFile, mkdir, readdir, readFile, stat } from 'node:fs/promises';
 import os from 'node:os';
 import { resolve, basename, join, sep } from 'node:path';
 import { exec } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 import ora from 'ora';
 import { ensureConfig, resetConfig } from './config.js';
 import { runOrchestrator, runPhase2, runSplit } from './core/orchestrator.js';
 import { clearCachedReport, loadReport } from './core/cache.js';
 import { generateHtml } from './core/htmlExporter.js';
 import { resetHistory } from './core/history.js';
+import { manualOpenCommand, openFileInBrowser } from './core/localReportViewer.js';
 import { theme } from './core/theme.js';
 
 const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
@@ -44,6 +46,8 @@ function printHelp(): void {
   console.log('  npx zenoai reset           Remove saved API provider/key');
   console.log("  npx zenoai reset-history   Remove this project's Zeno refactor history");
   console.log('  npx zenoai clear-report    Remove cached last report');
+  console.log('  npx zenoai report list     List saved local ship-readiness reports');
+  console.log('  npx zenoai report open latest  Open latest local report in your browser');
   console.log('  npx zenoai --export        Export cached report as HTML');
   console.log('  npx zenoai --output <file> Export cached report to a specific HTML file\n');
 
@@ -94,6 +98,96 @@ function checkProjectDirectory(): GuardResult {
   return { status: 'ok', selfRun };
 }
 
+interface LocalReportEntry {
+  path: string;
+  format: 'html' | 'json' | 'csv';
+  savedAt: Date;
+  projectType?: string;
+}
+
+async function listLocalReports(root: string): Promise<LocalReportEntry[]> {
+  const reportsDir = join(root, '.zeno', 'reports');
+  let names: string[];
+  try {
+    names = await readdir(reportsDir);
+  } catch {
+    return [];
+  }
+
+  const entries: LocalReportEntry[] = [];
+  for (const name of names) {
+    if (!/^ship-readiness-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}\.(html|json|csv)$/.test(name)) continue;
+    const fullPath = join(reportsDir, name);
+    const fileStat = await stat(fullPath);
+    const format = name.endsWith('.html') ? 'html' : name.endsWith('.csv') ? 'csv' : 'json';
+    let projectType: string | undefined;
+    if (format === 'json') {
+      try {
+        const parsed = JSON.parse(await readFile(fullPath, 'utf8')) as { report?: { projectType?: string } };
+        projectType = parsed.report?.projectType;
+      } catch {
+        projectType = undefined;
+      }
+    }
+    entries.push({ path: fullPath, format, savedAt: fileStat.mtime, projectType });
+  }
+
+  return entries.sort((a, b) => b.savedAt.getTime() - a.savedAt.getTime());
+}
+
+async function handleReportCommand(args: string[]): Promise<void> {
+  const subcommand = args[1];
+  const target = args[2];
+  const root = process.cwd();
+  const reports = await listLocalReports(root);
+
+  if (subcommand === 'list') {
+    if (reports.length === 0) {
+      console.log(theme.caution('No local ship-readiness reports found. Run `npx zenoai` first.'));
+      return;
+    }
+
+    console.log(theme.heading('Saved reports'));
+    for (const report of reports) {
+      const date = report.savedAt.toLocaleString('en-GB', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      });
+      const relPath = report.path.startsWith(root) ? report.path.slice(root.length + 1) : report.path;
+      const type = report.projectType ? ` ${report.projectType}` : '';
+      console.log(theme.muted(`${date}  ${report.format.toUpperCase()}${type}  ${relPath}`));
+    }
+    return;
+  }
+
+  if (subcommand === 'open' && target === 'latest') {
+    const latestHtml = reports.find(report => report.format === 'html');
+    const latestJson = reports.find(report => report.format === 'json');
+    const report = latestHtml ?? latestJson;
+    if (!report) {
+      console.log(theme.caution('No local ship-readiness reports found. Run `npx zenoai` first.'));
+      return;
+    }
+
+    try {
+      await openFileInBrowser(report.path);
+      console.log(theme.success(`Opened latest report: ${pathToFileURL(report.path).href}`));
+    } catch {
+      console.log(theme.caution('Could not open the report automatically.'));
+      console.log(theme.muted(`Open manually: ${manualOpenCommand(report.path)}`));
+      console.log(theme.info(pathToFileURL(report.path).href));
+    }
+    return;
+  }
+
+  console.log(theme.caution('Unknown report command.'));
+  console.log(theme.muted('Use `npx zenoai report list` or `npx zenoai report open latest`.'));
+}
+
 async function main() {
   const args = process.argv.slice(2);
   const command = args[0];
@@ -103,6 +197,11 @@ async function main() {
 
   if (command === 'help' || command === '--help' || command === '-h') {
     printHelp();
+    process.exit(0);
+  }
+
+  if (command === 'report') {
+    await handleReportCommand(args);
     process.exit(0);
   }
 

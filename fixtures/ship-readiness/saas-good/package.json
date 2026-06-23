@@ -1,0 +1,17 @@
+{
+  "name": "saas-good",
+  "private": true,
+  "scripts": {
+    "build": "next build",
+    "test": "vitest"
+  },
+  "dependencies": {
+    "next": "^15.0.0",
+    "@clerk/nextjs": "^6.0.0",
+    "@prisma/client": "^6.0.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "vitest": "^2.0.0"
+  }
+}

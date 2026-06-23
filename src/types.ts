@@ -24,10 +24,10 @@ export type ProjectType =
   | 'landing_page'
   | 'saas_app'
   | 'dashboard'
-  | 'ecommerce_payment_app'
-  | 'auth_app'
+  | 'devtool'
   | 'backend_api'
-  | 'cli_tooling'
+  | 'docs_site'
+  | 'ecommerce'
   | 'unknown';
 
 export type IssueSeverity = 'Critical' | 'High' | 'Medium' | 'Low';
@@ -51,10 +51,11 @@ export interface HealthReport {
   score: number;
   label: HealthLabel;
   summary: string;
-  files: RiskyFile[];
-  observations: string[];
-  actions: SuggestedAction[];
-  start: string;
+  files?: RiskyFile[];
+  observations?: string[];
+  actions?: SuggestedAction[];
+  start?: string;
+  safestNextStep?: string;
   reviewIntent?: ReviewIntent;
   projectType?: ProjectType;
   confidence?: 'High' | 'Medium' | 'Low';

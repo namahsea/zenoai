@@ -6,9 +6,13 @@ import { isHighConsequencePath } from './riskSignals.js';
 import type { ProjectType } from '../types.js';
 
 export interface PackageScan {
+  name?: string;
   packageManager: 'npm' | 'pnpm' | 'yarn' | 'bun' | 'unknown';
   framework: string;
   scripts: Record<string, string>;
+  binEntries: Array<{ command: string; target: string }>;
+  bin: string[];
+  hasBin: boolean;
   hasBuildScript: boolean;
   hasLintScript: boolean;
   hasTestScript: boolean;
@@ -22,7 +26,7 @@ export interface SourceFinding {
 }
 
 export interface LaunchFinding {
-  category: 'hard_blocker_candidate' | 'soft_blocker' | 'code_ownership_risk';
+  category: 'hard_blocker' | 'hard_blocker_candidate' | 'soft_blocker' | 'code_ownership_risk';
   issue: string;
   severity: 'Critical' | 'High' | 'Medium' | 'Low';
   certainty: 'confirmed' | 'likely' | 'needs_verification' | 'inferred';
@@ -30,8 +34,91 @@ export interface LaunchFinding {
   suggestedFix: string;
 }
 
+export type ActionFlowType =
+  | 'email_capture'
+  | 'preorder'
+  | 'book_demo'
+  | 'contact_sales'
+  | 'cta_navigation'
+  | 'cli_install'
+  | 'cli_entrypoint'
+  | 'command_execution'
+  | 'filesystem_write_safety'
+  | 'config_loading'
+  | 'auth_flow'
+  | 'protected_route'
+  | 'dashboard_load'
+  | 'settings_save'
+  | 'data_write'
+  | 'billing_checkout'
+  | 'invite_user'
+  | 'destructive_action'
+  | 'integration_connect'
+  | 'auth'
+  | 'checkout'
+  | 'unknown';
+
+export type ActionFlowStatus =
+  | 'wired'
+  | 'likely_unwired'
+  | 'needs_verification'
+  | 'not_detected';
+
+export interface ActionFlowFinding {
+  type: ActionFlowType;
+  label: string;
+  status: ActionFlowStatus;
+  severity: 'Critical' | 'High' | 'Medium' | 'Low';
+  certainty: 'confirmed' | 'likely' | 'needs_verification' | 'inferred';
+  evidence: string[];
+  risk: string;
+  fix: string;
+}
+
+export interface ProjectTypeDetection {
+  primaryType: ProjectType;
+  confidence: number;
+  confidenceLabel: 'low' | 'medium' | 'high';
+  secondaryTypes: ProjectType[];
+  signals: string[];
+  conflictingSignals: string[];
+  shouldAskUser: boolean;
+  scores: Partial<Record<ProjectType, number>>;
+}
+
+export interface DevtoolScan {
+  binTargets: SourceFinding[];
+  missingBinTargets: SourceFinding[];
+  installCommands: SourceFinding[];
+  installCommandMismatches: SourceFinding[];
+  filesystemWrites: SourceFinding[];
+  unsafeFilesystemWrites: SourceFinding[];
+  cliExecutionSignals: SourceFinding[];
+  cliErrorHandlingSignals: SourceFinding[];
+  configUsage: SourceFinding[];
+  configValidationSignals: SourceFinding[];
+}
+
+export interface SaasDashboardScan {
+  authRouteSignals: SourceFinding[];
+  protectedRouteSignals: SourceFinding[];
+  authGuardSignals: SourceFinding[];
+  authPackageSignals: SourceFinding[];
+  dataWrites: SourceFinding[];
+  validationSignals: SourceFinding[];
+  errorHandlingSignals: SourceFinding[];
+  envValidationSignals: SourceFinding[];
+  billingSignals: SourceFinding[];
+  webhookSignatureSignals: SourceFinding[];
+  dashboardSignals: SourceFinding[];
+  dashboardStateSignals: SourceFinding[];
+  destructiveActions: SourceFinding[];
+  destructiveConfirmationSignals: SourceFinding[];
+}
+
 export interface ShipReadinessScan {
   projectType: ProjectType;
+  projectTypeDetection: ProjectTypeDetection;
   package: PackageScan;
   testFiles: string[];
   routeFiles: string[];
@@ -62,13 +149,43 @@ export interface ShipReadinessScan {
   missingAltText: SourceFinding[];
   reducedMotion: SourceFinding[];
   riskyFiles: SourceFinding[];
+  actionFlows: ActionFlowFinding[];
+  devtool: DevtoolScan;
+  saasDashboard: SaasDashboardScan;
   launchFindings: LaunchFinding[];
   evidence: string[];
 }
 
 const SOURCE_EXTS = new Set(['.ts', '.tsx', '.js', '.jsx', '.astro']);
-const SKIP_DIRS = new Set(['node_modules', 'dist', '.git', '.next', 'coverage', 'out', 'build']);
+const PROJECT_FILE_EXTS = new Set(['.ts', '.tsx', '.js', '.jsx', '.astro', '.md', '.mdx']);
+const SKIP_DIRS = new Set(['node_modules', 'dist', '.git', '.next', 'coverage', 'out', 'build', 'fixtures']);
 const TEST_RE = /(?:^|[./_-])(?:test|tests|spec|__tests__)(?:[./_-]|$)|\.(?:test|spec)\.[tj]sx?$/i;
+const CAPTURE_COPY_RE = /\b(waitlist|join(?:ed)?|pre[\s-]?order|early access|request access|book demo|contact sales|contact us|sign up|signup|get started)\b/i;
+const EMAIL_CAPTURE_RE = /type\s*=\s*["']email["']|name\s*=\s*["']email["']|placeholder\s*=\s*["'][^"']*(email|waitlist|join|pre[\s-]?order|access|demo|contact)[^"']*["']|\b(email|setEmail)\b/i;
+const SUBMISSION_PATH_RE = /fetch\s*\(|axios\.|ky\s*\(|got\s*\(|navigator\.sendBeacon|action\s*=|formAction\s*=|['"]use server['"]|\/api\b|export\s+async\s+function\s+POST\b|supabase|firebase|prisma|drizzle|database|db\.\w+\.(create|insert|upsert)|resend|mailchimp|convertkit|loops|hubspot|airtable|google\s*sheets|notion|webhook|zapier|make\.com/i;
+const PARTIAL_SUBMISSION_RE = /onSubmit\s*=|handleSubmit|preventDefault\(\)|set[A-Z]\w*\([^)]*['"`]?\s*['"`]?\)|reset\(/i;
+const CTA_TEXT_RE = /\b(start|join|pre[\s-]?order|sign up|signup|book demo|contact|contact sales|get started|try now|install|docs|download|request access)\b/i;
+const NAVIGATION_RE = /href\s*=|router\.push|navigate\s*\(|window\.location|location\.href|Link\s+href|to\s*=/i;
+const INSTALL_COMMAND_RE = /\b(?:npx|bunx)\s+(@?[\w.-]+(?:\/[\w.-]+)?)(?=\s|$)|\bpnpm\s+dlx\s+(@?[\w.-]+(?:\/[\w.-]+)?)(?=\s|$)|\bnpm\s+(?:install|i)\s+(@?[\w.-]+(?:\/[\w.-]+)?)(?=\s|$)/gi;
+const FILESYSTEM_WRITE_RE = /\b(?:rm|rmSync|unlink|unlinkSync|rmdir|rmdirSync|writeFile|writeFileSync|rename|renameSync|cp|cpSync)\s*\(|\b(?:execa|exec|execSync|spawn|spawnSync)\s*\(\s*['"`][^'"`]*(?:rm|mv|cp|unlink|rmdir)\b/i;
+const FILESYSTEM_SAFETY_RE = /\b(?:dryRun|dry-run|confirm|confirmation|backup|allowlist|allow-list|safePath|rollback|manifest|preview|diff)\b/i;
+const CLI_EXECUTION_RE = /\b(?:program\.parse|parseAsync|command\s*\(|action\s*\(|execa\s*\(|exec\s*\(|fetch\s*\(|client\.(?:messages|responses|chat)|generateContent|runOrchestrator|main\(\))/i;
+const ERROR_HANDLING_RE = /\btry\s*\{|\.catch\s*\(|process\.exitCode|console\.error|ora\([^)]*\)\.fail|spinner\.fail|throw new Error/i;
+const CONFIG_VALIDATION_RE = /\b(?:validate|ensureConfig|getAiConfig|getApiKey|API key|api key|cannot be empty|missing|reset)\b/i;
+const BROWSER_GLOBAL_CODE_RE = /\b(?:window|document|navigator)\s*\.|\btypeof\s+(?:window|document|navigator)\b/;
+const AUTH_ROUTE_PATH_RE = /(?:^|\/)(login|signup|sign-in|sign-up|auth|onboarding)(?:\/|\.|$)/i;
+const PROTECTED_ROUTE_PATH_RE = /(?:^|\/)(dashboard|settings|account|admin|billing|workspace|organization|team)(?:\/|\.|$)/i;
+const DASHBOARD_ROUTE_PATH_RE = /(?:^|\/)(dashboard|admin|analytics|reports|metrics)(?:\/|\.|$)/i;
+const AUTH_GUARD_RE = /\b(?:middleware|getServerSession|auth\s*\(|currentUser|requireAuth|withAuth|useSession|redirect\s*\([^)]*(?:login|sign-in|signin|auth)|session\s*\?|session\s*&&|user\s*\?|user\s*&&)\b/i;
+const DATA_WRITE_RE = /\b(?:prisma\.\w+\.(?:create|update|delete|upsert)|db\.(?:insert|update|delete)|drizzle\.(?:insert|update|delete)|\.from\s*\([^)]*\)\.(?:insert|update|delete|upsert)|fetch\s*\([^)]*method\s*:\s*['"`](?:POST|PUT|PATCH|DELETE)['"`]|export\s+async\s+function\s+(?:POST|PUT|PATCH|DELETE)\b|['"]use server['"])/is;
+const VALIDATION_RE = /\b(?:zod|yup|valibot|superstruct|schema\.(?:parse|safeParse)|safeParse\s*\(|parse\s*\(|required|if\s*\([^)]*(?:email|name|id|userId|workspaceId|amount|price|plan|role)[^)]*\))/i;
+const USER_ERROR_RE = /\b(?:try\s*\{|\.catch\s*\(|catch\s*\(|return\s+(?:NextResponse\.)?json\s*\([^)]*error|throw new Error|toast\.(?:error|warning)|setError|errorBoundary|ErrorBoundary)\b/i;
+const ENV_VALIDATION_RE = /\b(?:env\.safeParse|envSchema|createEnv|zod.*process\.env|requiredEnv|validateEnv|assertEnv|throw new Error\([^)]*(?:env|environment|DATABASE_URL|STRIPE|CLERK|AUTH|SUPABASE)|if\s*\(\s*!process\.env\.)/is;
+const BILLING_RE = /\b(?:stripe|paddle|lemonsqueezy|checkout|billing|subscription|invoice|payment|webhook)\b/i;
+const WEBHOOK_SIGNATURE_RE = /\b(?:constructEvent|webhookSignature|signature|svix|stripe-signature|verifyWebhook|verifySignature)\b/i;
+const DASHBOARD_STATE_RE = /\b(?:loading|error|empty|skeleton|spinner|fallback|no data|not found|isLoading|isError|isPending|Suspense)\b/i;
+const DESTRUCTIVE_ACTION_RE = /\b(?:delete|remove|revoke|disconnect|archive|reset|cancel subscription|downgrade)\b/i;
+const DESTRUCTIVE_CONFIRM_RE = /\b(?:confirm|confirmation|dialog|modal|alert|undo|are you sure)\b/i;
 
 function detectPackageManager(root: string): PackageScan['packageManager'] {
   if (existsSync(join(root, 'pnpm-lock.yaml'))) return 'pnpm';
@@ -83,6 +200,9 @@ async function readPackage(root: string): Promise<PackageScan> {
     packageManager: detectPackageManager(root),
     framework: 'unknown',
     scripts: {},
+    binEntries: [],
+    bin: [],
+    hasBin: false,
     hasBuildScript: false,
     hasLintScript: false,
     hasTestScript: false,
@@ -93,11 +213,17 @@ async function readPackage(root: string): Promise<PackageScan> {
   try {
     const raw = await readFile(join(root, 'package.json'), 'utf8');
     const parsed = JSON.parse(raw) as {
+      name?: string;
       scripts?: Record<string, string>;
+      bin?: string | Record<string, string>;
       dependencies?: Record<string, string>;
       devDependencies?: Record<string, string>;
     };
     const scripts = parsed.scripts ?? {};
+    const binEntries = typeof parsed.bin === 'string'
+      ? [{ command: parsed.name ?? 'cli', target: parsed.bin }]
+      : Object.entries(parsed.bin ?? {}).map(([command, target]) => ({ command, target }));
+    const bin = binEntries.map(entry => entry.target);
     const dependencies = Object.keys(parsed.dependencies ?? {});
     const devDependencies = Object.keys(parsed.devDependencies ?? {});
     const allDeps = new Set([...dependencies, ...devDependencies]);
@@ -112,8 +238,12 @@ async function readPackage(root: string): Promise<PackageScan> {
 
     return {
       ...empty,
+      name: parsed.name,
       framework,
       scripts,
+      binEntries,
+      bin,
+      hasBin: bin.length > 0,
       hasBuildScript: Boolean(scripts.build),
       hasLintScript: Boolean(scripts.lint),
       hasTestScript: Boolean(scripts.test),
@@ -148,6 +278,29 @@ function collectSourceFiles(root: string): string[] {
   return files;
 }
 
+function collectProjectFiles(root: string): string[] {
+  let entries: import('node:fs').Dirent[];
+  try {
+    entries = readdirSync(root, { withFileTypes: true, recursive: true });
+  } catch {
+    return [];
+  }
+
+  const files: string[] = [];
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    if (!PROJECT_FILE_EXTS.has(extname(entry.name))) continue;
+    const parentDir: string =
+      (entry as unknown as { parentPath?: string }).parentPath ??
+      (entry as unknown as { path: string }).path;
+    const fullPath = join(parentDir, entry.name);
+    const relPath = relative(root, fullPath);
+    if (relPath.split(sep).some(part => SKIP_DIRS.has(part))) continue;
+    files.push(fullPath);
+  }
+  return files;
+}
+
 function includesAny(source: string, patterns: RegExp[]): boolean {
   return patterns.some(pattern => pattern.test(source));
 }
@@ -155,6 +308,274 @@ function includesAny(source: string, patterns: RegExp[]): boolean {
 function pushFinding(target: SourceFinding[], path: string, evidence: string, limit = 20): void {
   if (target.length >= limit) return;
   target.push({ path, evidence });
+}
+
+function hasActionFlowType(flows: ActionFlowFinding[], type: ActionFlowType): boolean {
+  return flows.some(flow => flow.type === type);
+}
+
+function detectFlowType(source: string): ActionFlowType {
+  if (/\bpre[\s-]?order\b/i.test(source)) return 'preorder';
+  if (/\bbook demo\b/i.test(source)) return 'book_demo';
+  if (/\bcontact sales|contact us\b/i.test(source)) return 'contact_sales';
+  if (EMAIL_CAPTURE_RE.test(source)) return 'email_capture';
+  return 'unknown';
+}
+
+function isCliPackage(packageScan: PackageScan): boolean {
+  const deps = new Set([...packageScan.dependencies, ...packageScan.devDependencies]);
+  return packageScan.hasBin ||
+    deps.has('commander') ||
+    deps.has('yargs') ||
+    deps.has('cac') ||
+    deps.has('oclif') ||
+    deps.has('@oclif/core') ||
+    deps.has('@inquirer/prompts') ||
+    deps.has('inquirer') ||
+    deps.has('execa') ||
+    /cli|devtool|tooling|command/i.test(packageScan.name ?? '');
+}
+
+function collectInstallCommands(source: string): string[] {
+  const commands: string[] = [];
+  for (const match of source.matchAll(INSTALL_COMMAND_RE)) {
+    const pkg = match[1] ?? match[2] ?? match[3];
+    if (pkg) commands.push(pkg);
+  }
+  return commands;
+}
+
+function packageNameMatchesDocumentedCommand(packageName: string | undefined, documentedName: string): boolean {
+  if (!packageName) return true;
+  return documentedName === packageName;
+}
+
+function stripStringAndRegexLiterals(source: string): string {
+  return source
+    .replace(/\/(?![/*])(?:\\.|[^/\\\n])+\/[dgimsuvy]*/g, '')
+    .replace(/`(?:\\.|[^`\\])*`/gs, '')
+    .replace(/'(?:\\.|[^'\\])*'/gs, '')
+    .replace(/"(?:\\.|[^"\\])*"/gs, '');
+}
+
+function buildActionFlows(args: {
+  packageScan: PackageScan;
+  devtool: DevtoolScan;
+  captureSignals: SourceFinding[];
+  captureWiringSignals: SourceFinding[];
+  capturePartialSignals: SourceFinding[];
+  ctaSignals: SourceFinding[];
+  ctaWiringSignals: SourceFinding[];
+  suspiciousButtons: SourceFinding[];
+}): ActionFlowFinding[] {
+  const flows: ActionFlowFinding[] = [];
+
+  if (args.captureSignals.length > 0) {
+    const primaryCapture = args.captureSignals[0];
+    const type = detectFlowType(primaryCapture.evidence);
+    const hasClearSubmissionPath = args.captureWiringSignals.length > 0;
+    const hasPartialSubmissionLogic = args.capturePartialSignals.length > 0;
+    const status: ActionFlowStatus = hasClearSubmissionPath
+      ? 'wired'
+      : 'likely_unwired';
+
+    if (status !== 'wired') {
+      flows.push({
+        type: type === 'unknown' ? 'email_capture' : type,
+        label: type === 'preorder'
+          ? 'Primary preorder capture'
+          : type === 'book_demo'
+            ? 'Primary demo request capture'
+            : type === 'contact_sales'
+              ? 'Primary contact capture'
+              : 'Primary email capture',
+        status,
+        severity: 'High',
+        certainty: status === 'likely_unwired' ? 'likely' : 'needs_verification',
+        evidence: [
+          `${primaryCapture.path}: ${primaryCapture.evidence}`,
+          hasPartialSubmissionLogic
+            ? `${args.capturePartialSignals[0].path}: ${args.capturePartialSignals[0].evidence}`
+            : 'No fetch/API route/server action/form action/database/email integration was detected.',
+        ],
+        risk: 'Users may think they joined the waitlist, preordered, requested access, or contacted the team, but nothing is actually captured.',
+        fix: 'Wire the flow to an API route, server action, database, email platform, CRM, webhook, or disable/rename the CTA before launch.',
+      });
+    }
+  }
+
+  if (args.ctaSignals.length > 0 && args.suspiciousButtons.length > 0) {
+    const suspiciousCount = Math.min(args.suspiciousButtons.length, 5);
+    flows.push({
+      type: 'cta_navigation',
+      label: 'Primary CTA navigation',
+      status: args.ctaWiringSignals.length > 0 ? 'needs_verification' : 'needs_verification',
+      severity: 'High',
+      certainty: 'needs_verification',
+      evidence: [
+        `${args.ctaSignals[0].path}: ${args.ctaSignals[0].evidence}`,
+        `${suspiciousCount} prominent CTA button${suspiciousCount === 1 ? '' : 's'} lack obvious href/onClick/form submit behavior.`,
+      ],
+      risk: 'Users may click a primary CTA and nothing happens, or the action may not reach a real destination.',
+      fix: 'Wire each primary CTA to a real destination, form submission, router navigation, download, install command, or disabled state.',
+    });
+  }
+
+  if (isCliPackage(args.packageScan)) {
+    flows.push({
+      type: 'cli_install',
+      label: 'CLI install/run path',
+      status: args.packageScan.hasBin && args.devtool.missingBinTargets.length === 0 ? 'wired' : 'needs_verification',
+      severity: args.packageScan.hasBin && args.devtool.missingBinTargets.length === 0 ? 'Low' : 'High',
+      certainty: args.packageScan.hasBin ? 'confirmed' : 'needs_verification',
+      evidence: args.packageScan.hasBin
+        ? [`package.json bin entries detected: ${args.packageScan.bin.join(', ')}.`]
+        : ['Package dependencies/name suggest CLI or devtool behavior, but no package.json bin entry was detected.'],
+      risk: args.packageScan.hasBin
+        ? 'The package declares a CLI entrypoint, but the install/run path still needs normal release QA.'
+        : 'Users may try to install or run the tool and have no executable entrypoint.',
+      fix: args.packageScan.hasBin
+        ? 'Verify the published package includes the bin target and that npx/install commands execute the expected entrypoint.'
+        : 'Add a package.json bin entry or clarify that this package is not installed as a CLI.',
+    });
+
+    flows.push({
+      type: 'cli_entrypoint',
+      label: 'CLI entrypoint',
+      status: args.packageScan.hasBin && args.devtool.missingBinTargets.length === 0
+        ? 'wired'
+        : args.packageScan.hasBin
+          ? 'likely_unwired'
+          : 'not_detected',
+      severity: args.devtool.missingBinTargets.length > 0 ? 'Critical' : args.packageScan.hasBin ? 'Low' : 'High',
+      certainty: 'confirmed',
+      evidence: args.devtool.missingBinTargets.length > 0
+        ? args.devtool.missingBinTargets.map(item => `${item.path}: ${item.evidence}`)
+        : args.devtool.binTargets.length > 0
+          ? args.devtool.binTargets.map(item => `${item.path}: ${item.evidence}`)
+          : ['No package.json bin target was detected.'],
+      risk: args.devtool.missingBinTargets.length > 0
+        ? 'Users may install the package but the CLI executable points to a missing file.'
+        : 'Users may not have a reliable executable entrypoint.',
+      fix: 'Make package.json bin point to an included CLI file and verify npx/install execution.',
+    });
+
+    if (args.devtool.unsafeFilesystemWrites.length > 0) {
+      flows.push({
+        type: 'filesystem_write_safety',
+        label: 'Filesystem write safety',
+        status: 'needs_verification',
+        severity: 'High',
+        certainty: 'needs_verification',
+        evidence: args.devtool.unsafeFilesystemWrites.slice(0, 3).map(item => `${item.path}: ${item.evidence}`),
+        risk: 'A CLI can change or delete user files without enough visible safety guards.',
+        fix: 'Add confirmation, dry-run, backup, allowlist, diff preview, or rollback guards around file writes.',
+      });
+    }
+
+    if (args.devtool.configUsage.length > 0 && args.devtool.configValidationSignals.length === 0) {
+      flows.push({
+        type: 'config_loading',
+        label: 'Config loading',
+        status: 'needs_verification',
+        severity: 'Medium',
+        certainty: 'needs_verification',
+        evidence: args.devtool.configUsage.slice(0, 3).map(item => `${item.path}: ${item.evidence}`),
+        risk: 'Users may hit unclear failures when API keys, env vars, provider settings, or config files are missing.',
+        fix: 'Validate required config and print a direct recovery step before running commands.',
+      });
+    }
+  }
+
+  return flows;
+}
+
+function buildSaasDashboardActionFlows(scan: SaasDashboardScan): ActionFlowFinding[] {
+  const flows: ActionFlowFinding[] = [];
+
+  if (scan.authRouteSignals.length > 0 && scan.authGuardSignals.length === 0 && scan.authPackageSignals.length === 0) {
+    flows.push({
+      type: 'auth_flow',
+      label: 'Auth flow',
+      status: 'needs_verification',
+      severity: 'High',
+      certainty: 'needs_verification',
+      evidence: scan.authRouteSignals.slice(0, 3).map(item => `${item.path}: ${item.evidence}`),
+      risk: 'Users may access protected screens or fail to sign in correctly.',
+      fix: 'Add or verify auth package/session handling and route guards before launch.',
+    });
+  }
+
+  if (scan.protectedRouteSignals.length > 0 && scan.authGuardSignals.length === 0) {
+    flows.push({
+      type: 'protected_route',
+      label: 'Protected routes',
+      status: 'needs_verification',
+      severity: 'High',
+      certainty: 'needs_verification',
+      evidence: scan.protectedRouteSignals.slice(0, 3).map(item => `${item.path}: ${item.evidence}`),
+      risk: 'Users may access dashboard, settings, account, admin, or billing screens without authorization.',
+      fix: 'Guard protected routes with middleware, session checks, auth(), currentUser, requireAuth, withAuth, or redirects to login.',
+    });
+  }
+
+  if (scan.dataWrites.length > 0 && (scan.validationSignals.length === 0 || scan.errorHandlingSignals.length === 0)) {
+    flows.push({
+      type: 'data_write',
+      label: 'Data write path',
+      status: 'needs_verification',
+      severity: 'High',
+      certainty: 'needs_verification',
+      evidence: [
+        ...scan.dataWrites.slice(0, 2).map(item => `${item.path}: ${item.evidence}`),
+        scan.validationSignals.length === 0 ? 'No obvious validation signal found.' : 'Validation signal found.',
+        scan.errorHandlingSignals.length === 0 ? 'No obvious user-facing error handling signal found.' : 'Error handling signal found.',
+      ],
+      risk: 'Invalid input, failed writes, or partial mutations may reach production users without clear recovery.',
+      fix: 'Validate inputs and wrap writes in clear error handling before launch.',
+    });
+  }
+
+  if (scan.billingSignals.length > 0 && scan.webhookSignatureSignals.length === 0) {
+    flows.push({
+      type: 'billing_checkout',
+      label: 'Billing/webhook flow',
+      status: 'needs_verification',
+      severity: 'High',
+      certainty: 'needs_verification',
+      evidence: scan.billingSignals.slice(0, 3).map(item => `${item.path}: ${item.evidence}`),
+      risk: 'Checkout or subscription state may become incorrect if webhooks are missing or unverified.',
+      fix: 'Verify checkout routes, success/cancel URLs, webhook routes, env vars, and webhook signature validation.',
+    });
+  }
+
+  if (scan.destructiveActions.length > 0 && scan.destructiveConfirmationSignals.length === 0) {
+    flows.push({
+      type: 'destructive_action',
+      label: 'Destructive action',
+      status: 'needs_verification',
+      severity: 'High',
+      certainty: 'needs_verification',
+      evidence: scan.destructiveActions.slice(0, 3).map(item => `${item.path}: ${item.evidence}`),
+      risk: 'Users may delete, revoke, disconnect, reset, cancel, or downgrade something important without confirmation.',
+      fix: 'Add confirmation, modal/dialog, undo, or a clear review step before destructive actions run.',
+    });
+  }
+
+  if (scan.dashboardSignals.length > 0 && scan.dashboardStateSignals.length === 0) {
+    flows.push({
+      type: 'dashboard_load',
+      label: 'Dashboard states',
+      status: 'needs_verification',
+      severity: 'Medium',
+      certainty: 'inferred',
+      evidence: scan.dashboardSignals.slice(0, 3).map(item => `${item.path}: ${item.evidence}`),
+      risk: 'Dashboard users may see blank or confusing screens when data is loading, empty, or fails.',
+      fix: 'Add loading, error, empty, skeleton, fallback, or no-data states for dashboard routes.',
+    });
+  }
+
+  return flows;
 }
 
 function routeFile(path: string): boolean {
@@ -169,34 +590,151 @@ function apiRouteFile(path: string): boolean {
     || /(?:^|\/)route\.[tj]s$/.test(path);
 }
 
-function inferProjectType(scan: Omit<ShipReadinessScan, 'projectType' | 'evidence'>): ProjectType {
+function addScore(
+  scores: Partial<Record<ProjectType, number>>,
+  signalsByType: Partial<Record<ProjectType, string[]>>,
+  type: ProjectType,
+  amount: number,
+  signal: string,
+): void {
+  scores[type] = (scores[type] ?? 0) + amount;
+  signalsByType[type] = [...(signalsByType[type] ?? []), signal];
+}
+
+function detectProjectType(
+  scan: Omit<ShipReadinessScan, 'projectType' | 'projectTypeDetection' | 'evidence'>,
+  projectFiles: string[],
+): ProjectTypeDetection {
+  const scores: Partial<Record<ProjectType, number>> = {};
+  const signalsByType: Partial<Record<ProjectType, string[]>> = {};
+  const deps = new Set([...scan.package.dependencies, ...scan.package.devDependencies]);
   const allPaths = [
+    ...projectFiles.map(file => file.replace(/\\/g, '/')),
     ...scan.routeFiles,
     ...scan.apiRoutes,
     ...scan.riskyFiles.map(item => item.path),
   ].join('\n').toLowerCase();
+  const allEvidence = [
+    ...scan.forms.map(item => item.evidence),
+    ...scan.suspiciousForms.map(item => item.evidence),
+    ...scan.buttons.map(item => item.evidence),
+    ...scan.actionFlows.flatMap(flow => flow.evidence),
+    ...scan.networkCalls.map(item => item.evidence),
+  ].join('\n').toLowerCase();
 
-  if (scan.package.dependencies.includes('commander') || scan.package.dependencies.includes('inquirer') || scan.package.dependencies.includes('@inquirer/prompts')) {
-    return 'cli_tooling';
+  if (scan.routeFiles.length <= 2 && scan.apiRoutes.length === 0 && (scan.package.framework === 'next' || scan.package.framework === 'react' || scan.package.framework === 'vite' || scan.package.framework === 'astro')) {
+    addScore(scores, signalsByType, 'landing_page', 18, 'single public route shape');
   }
-  if (/checkout|payment|billing|subscription|cart|order/.test(allPaths)) return 'ecommerce_payment_app';
-  if (/auth|login|session|permission/.test(allPaths)) return 'auth_app';
-  if (scan.apiRoutes.length >= 3 || scan.package.framework === 'backend') return 'backend_api';
-  if (/dashboard|admin|settings|account/.test(allPaths)) return 'dashboard';
-  if (scan.forms.length > 0 && scan.apiRoutes.length <= 2 && scan.routeFiles.length <= 8) return 'landing_page';
-  if (scan.package.framework === 'next' || scan.package.framework === 'react' || scan.package.framework === 'vite' || scan.package.framework === 'astro') {
-    return scan.apiRoutes.length <= 1 ? 'landing_page' : 'saas_app';
+  if (scan.actionFlows.some(flow => ['email_capture', 'preorder', 'book_demo', 'contact_sales', 'cta_navigation'].includes(flow.type))) {
+    addScore(scores, signalsByType, 'landing_page', 22, 'primary CTA or capture flow detected');
   }
-  return 'unknown';
+  if (/\b(hero|features|pricing|faq|testimonial|waitlist|pre[\s-]?order|early access|book demo|contact sales|get started)\b/i.test(allPaths + '\n' + allEvidence)) {
+    addScore(scores, signalsByType, 'landing_page', 18, 'marketing or conversion copy detected');
+  }
+  if (!/dashboard|admin|login|signup|auth|checkout|cart|billing|order|api\//.test(allPaths) && scan.apiRoutes.length === 0) {
+    addScore(scores, signalsByType, 'landing_page', 8, 'no auth/dashboard/payment/API routes detected');
+  }
+
+  if (/login|signup|sign-in|sign-up|auth|settings|account|billing|onboarding|workspace|organization|team|session/.test(allPaths)) {
+    addScore(scores, signalsByType, 'saas_app', 24, 'auth, account, billing, onboarding, workspace, or team route found');
+  }
+  if (['next-auth', 'clerk', '@clerk/nextjs', 'auth0', '@auth0/nextjs-auth0', 'supabase', '@supabase/supabase-js', 'firebase', 'prisma', '@prisma/client', 'drizzle-orm', 'mongoose', 'postgres', 'mysql', 'mysql2', 'sqlite', 'better-sqlite3'].some(dep => deps.has(dep))) {
+    addScore(scores, signalsByType, 'saas_app', 22, 'auth or database package detected');
+  }
+  if (['stripe', '@stripe/stripe-js', 'paddle', '@paddle/paddle-js', 'lemonsqueezy'].some(dep => deps.has(dep)) || /billing|subscription|invoice/.test(allPaths + '\n' + allEvidence)) {
+    addScore(scores, signalsByType, 'saas_app', 10, 'billing or subscription signal detected');
+  }
+  if (/\b(user|session|workspace|organization|team|invite|permission)\b/.test(allPaths + '\n' + allEvidence)) {
+    addScore(scores, signalsByType, 'saas_app', 14, 'user/session/workspace logic signal detected');
+  }
+
+  if (/dashboard|admin|analytics|reports|metrics/.test(allPaths)) {
+    addScore(scores, signalsByType, 'dashboard', 24, 'dashboard/admin/analytics/report route found');
+  }
+  if (['recharts', 'chart.js', 'ag-grid', '@tanstack/table-core', '@tanstack/react-table'].some(dep => deps.has(dep)) || /chart|table|filter|date range|datatable|export/.test(allPaths + '\n' + allEvidence)) {
+    addScore(scores, signalsByType, 'dashboard', 20, 'chart, table, filter, or reporting signal detected');
+  }
+
+  if (scan.package.hasBin) {
+    addScore(scores, signalsByType, 'devtool', 35, 'package.json bin entry detected');
+  }
+  if (['commander', 'yargs', 'cac', 'oclif', '@oclif/core', '@inquirer/prompts', 'inquirer', 'prompts', 'chalk', 'execa'].some(dep => deps.has(dep))) {
+    addScore(scores, signalsByType, 'devtool', 20, 'CLI/devtool package detected');
+  }
+  if (/bin\/|(^|\/)(cli|bin|commands?)\.[tj]sx?$|commands\/|cli|command|npx|install|usage|get started/.test(allPaths + '\n' + allEvidence)) {
+    addScore(scores, signalsByType, 'devtool', 12, 'install, usage, command, or CLI copy detected');
+  }
+  if (scan.devtool.binTargets.length > 0 || scan.devtool.missingBinTargets.length > 0) {
+    addScore(scores, signalsByType, 'devtool', 14, 'CLI bin target checked');
+  }
+  if (scan.devtool.installCommands.length > 0) {
+    addScore(scores, signalsByType, 'devtool', 8, 'documented install/run command detected');
+  }
+
+  if (scan.apiRoutes.length >= 2 || scan.package.framework === 'backend') {
+    addScore(scores, signalsByType, 'backend_api', 24, 'multiple API routes or backend framework detected');
+  }
+  if (['express', 'fastify', 'hono', '@trpc/server', 'trpc'].some(dep => deps.has(dep)) || /server\.ts|middleware|webhook|route handler|route\.ts/.test(allPaths)) {
+    addScore(scores, signalsByType, 'backend_api', 22, 'server, middleware, webhook, route handler, or backend package detected');
+  }
+  if (scan.riskyFiles.length > 0 || /\.(create|update|upsert|delete|insert|save)\s*\(/.test(allEvidence)) {
+    addScore(scores, signalsByType, 'backend_api', 14, 'data-write or high-consequence server path detected');
+  }
+
+  if (/docs|documentation|api-reference|getting-started|guide|mdx?$/i.test(allPaths)) {
+    addScore(scores, signalsByType, 'docs_site', 24, 'docs, guide, API reference, or markdown route detected');
+  }
+  if (/getting started|installation|api reference|docs navigation|sidebar/i.test(allPaths + '\n' + allEvidence)) {
+    addScore(scores, signalsByType, 'docs_site', 16, 'documentation copy or navigation signal detected');
+  }
+
+  if (/checkout|cart|order|billing|payment|subscription|invoice/.test(allPaths)) {
+    addScore(scores, signalsByType, 'ecommerce', 28, 'checkout, cart, order, billing, payment, or subscription route found');
+  }
+  if (['stripe', '@stripe/stripe-js', 'paddle', '@paddle/paddle-js', 'lemonsqueezy', 'paypal', '@paypal/react-paypal-js'].some(dep => deps.has(dep))) {
+    addScore(scores, signalsByType, 'ecommerce', 26, 'payment provider package detected');
+  }
+  if (/webhook|invoice|subscription|payment intent|checkout session/.test(allPaths + '\n' + allEvidence)) {
+    addScore(scores, signalsByType, 'ecommerce', 16, 'payment, webhook, invoice, or subscription signal detected');
+  }
+
+  const ranked = (Object.entries(scores) as Array<[ProjectType, number]>)
+    .filter(([type]) => type !== 'unknown')
+    .sort((a, b) => b[1] - a[1]);
+  const [topType, topScore] = ranked[0] ?? ['unknown', 0];
+  const secondScore = ranked[1]?.[1] ?? 0;
+  const gap = topScore - secondScore;
+  const conflictingSignals = ranked
+    .filter(([type, score]) => type !== topType && score >= 20)
+    .flatMap(([type]) => (signalsByType[type] ?? []).map(signal => `${type}: ${signal}`))
+    .slice(0, 6);
+  const confidence = Math.max(0, Math.min(1, topScore / Math.max(topScore + secondScore, 1)));
+  let confidenceLabel: ProjectTypeDetection['confidenceLabel'];
+  if (topScore >= 40 && gap >= 20 && conflictingSignals.length <= 2) confidenceLabel = 'high';
+  else if (topScore >= 25 && gap >= 10) confidenceLabel = 'medium';
+  else confidenceLabel = 'low';
+
+  return {
+    primaryType: topType,
+    confidence,
+    confidenceLabel,
+    secondaryTypes: ranked.slice(1, 4).map(([type]) => type),
+    signals: (signalsByType[topType] ?? []).slice(0, 6),
+    conflictingSignals,
+    shouldAskUser: confidenceLabel !== 'high',
+    scores,
+  };
 }
 
 function buildEvidence(scan: Omit<ShipReadinessScan, 'projectType' | 'evidence'>, projectType: ProjectType): string[] {
   const evidence: string[] = [];
   evidence.push(`Project type inferred as ${projectType}.`);
+  evidence.push(`Project type confidence: ${scan.projectTypeDetection.confidenceLabel} (${scan.projectTypeDetection.confidence.toFixed(2)}).`);
   evidence.push(`Framework: ${scan.package.framework}; package manager: ${scan.package.packageManager}.`);
   evidence.push(`Scripts: build=${scan.package.hasBuildScript ? 'yes' : 'no'}, lint=${scan.package.hasLintScript ? 'yes' : 'no'}, test=${scan.package.hasTestScript ? 'yes' : 'no'}.`);
   evidence.push(`Tests detected: ${scan.testFiles.length}.`);
   evidence.push(`Routes/pages detected: ${scan.routeFiles.length}; API/server routes detected: ${scan.apiRoutes.length}.`);
+  if (scan.actionFlows.length > 0) evidence.push(`Primary action flows detected: ${scan.actionFlows.map(flow => `${flow.type}:${flow.status}`).join(', ')}.`);
   if (scan.suspiciousForms.length > 0) evidence.push(`${scan.suspiciousForms.length} form(s) look unwired or only locally handled.`);
   if (scan.suspiciousButtons.length > 0) evidence.push(`${scan.suspiciousButtons.length} button(s) may lack meaningful click behavior.`);
   if (scan.suspiciousLinks.length > 0) evidence.push(`${scan.suspiciousLinks.length} suspicious link(s) found, such as empty href, #, or javascript:void(0).`);
@@ -206,13 +744,139 @@ function buildEvidence(scan: Omit<ShipReadinessScan, 'projectType' | 'evidence'>
   if (scan.heavyAssets.length > 0) evidence.push(`${scan.heavyAssets.length} heavy media/animation signal(s) found.`);
   if (scan.missingAltText.length > 0) evidence.push(`${scan.missingAltText.length} possible missing image alt text issue(s) found.`);
   if (scan.reducedMotion.length === 0 && scan.heavyAssets.length > 0) evidence.push('Heavy media/animation found but no reduced-motion signal detected.');
+  if (scan.saasDashboard.protectedRouteSignals.length > 0) evidence.push(`${scan.saasDashboard.protectedRouteSignals.length} protected route signal(s) found; guard signals=${scan.saasDashboard.authGuardSignals.length}.`);
+  if (scan.saasDashboard.dataWrites.length > 0) evidence.push(`${scan.saasDashboard.dataWrites.length} data write signal(s) found; validation=${scan.saasDashboard.validationSignals.length}, error handling=${scan.saasDashboard.errorHandlingSignals.length}.`);
+  if (scan.saasDashboard.dashboardSignals.length > 0) evidence.push(`${scan.saasDashboard.dashboardSignals.length} dashboard signal(s) found; loading/error/empty state signals=${scan.saasDashboard.dashboardStateSignals.length}.`);
   return evidence;
 }
 
-function buildLaunchFindings(scan: Omit<ShipReadinessScan, 'projectType' | 'evidence' | 'launchFindings'>): LaunchFinding[] {
+function buildLaunchFindings(scan: Omit<ShipReadinessScan, 'projectType' | 'projectTypeDetection' | 'evidence' | 'launchFindings'>): LaunchFinding[] {
   const findings: LaunchFinding[] = [];
+  const isDevtool = isCliPackage(scan.package);
+
+  if (isDevtool && !scan.package.hasBin) {
+    findings.push({
+      category: 'hard_blocker_candidate',
+      issue: 'CLI entrypoint missing',
+      severity: 'High',
+      certainty: 'confirmed',
+      evidence: 'package.json has no bin entry.',
+      suggestedFix: 'Add a package.json bin entry that points to the CLI entry file before publishing or recommending npx usage.',
+    });
+  }
+
+  for (const missingTarget of scan.devtool.missingBinTargets.slice(0, 3)) {
+    findings.push({
+      category: 'hard_blocker',
+      issue: 'CLI bin target does not exist',
+      severity: 'Critical',
+      certainty: 'confirmed',
+      evidence: `${missingTarget.path}: ${missingTarget.evidence}`,
+      suggestedFix: 'Update package.json bin to point to an included executable file, or add the missing bin target.',
+    });
+  }
+
+  if (scan.devtool.installCommandMismatches.length > 0) {
+    const mismatch = scan.devtool.installCommandMismatches[0];
+    findings.push({
+      category: 'hard_blocker_candidate',
+      issue: 'Install command may be wrong',
+      severity: 'High',
+      certainty: 'likely',
+      evidence: scan.devtool.installCommandMismatches.length === 1
+        ? `${mismatch.path}: ${mismatch.evidence}`
+        : `${mismatch.path}: ${mismatch.evidence} (${scan.devtool.installCommandMismatches.length} mismatch signals found).`,
+      suggestedFix: 'Update README/docs install and npx commands to match package.json name.',
+    });
+  }
+
+  if (isDevtool && scan.devtool.cliExecutionSignals.length > 0 && scan.devtool.cliErrorHandlingSignals.length === 0) {
+    findings.push({
+      category: 'soft_blocker',
+      issue: 'CLI error handling needs verification',
+      severity: 'Medium',
+      certainty: 'inferred',
+      evidence: `${scan.devtool.cliExecutionSignals.length} command execution/API/shell signal(s) found with no obvious user-facing error handling.`,
+      suggestedFix: 'Wrap command execution in try/catch and print concise recovery steps for common failures.',
+    });
+  }
+
+  if (isDevtool && scan.devtool.configUsage.length > 0 && scan.devtool.configValidationSignals.length === 0) {
+    findings.push({
+      category: 'soft_blocker',
+      issue: 'CLI config validation needs verification',
+      severity: 'Medium',
+      certainty: 'needs_verification',
+      evidence: `${scan.devtool.configUsage.length} config/env/API key signal(s) found with no obvious validation message.`,
+      suggestedFix: 'Validate required config before running commands and show a clear setup/reset instruction.',
+    });
+  }
+
+  const hasSaasDashboardSignals = scan.saasDashboard.authRouteSignals.length > 0 ||
+    scan.saasDashboard.protectedRouteSignals.length > 0 ||
+    scan.saasDashboard.dashboardSignals.length > 0 ||
+    scan.saasDashboard.dataWrites.length > 0 ||
+    scan.saasDashboard.billingSignals.length > 0;
+
+  if (!isDevtool && hasSaasDashboardSignals && scan.envUsage.length > 0 && scan.saasDashboard.envValidationSignals.length === 0) {
+    findings.push({
+      category: 'soft_blocker',
+      issue: 'Required environment variables need validation',
+      severity: 'Medium',
+      certainty: 'needs_verification',
+      evidence: `${scan.envUsage.length} environment variable usage signal(s) found with no obvious env validation/helpful failure path.`,
+      suggestedFix: 'Validate required env vars at startup or before the relevant auth, database, billing, or API flow runs.',
+    });
+  }
+
+  for (const unsafeWrite of scan.devtool.unsafeFilesystemWrites.slice(0, 3)) {
+    findings.push({
+      category: 'code_ownership_risk',
+      issue: 'Filesystem writes need safety guard',
+      severity: 'High',
+      certainty: 'needs_verification',
+      evidence: `${unsafeWrite.path}: ${unsafeWrite.evidence}`,
+      suggestedFix: 'Add dry-run, confirmation, backup, allowlist, diff preview, or rollback guard around filesystem writes.',
+    });
+  }
+
+  for (const flow of scan.actionFlows) {
+    if (flow.status === 'wired' || flow.status === 'not_detected') continue;
+    if (['cli_install', 'cli_entrypoint', 'filesystem_write_safety', 'config_loading', 'command_execution'].includes(flow.type)) continue;
+
+    const issue = flow.type === 'cta_navigation'
+      ? 'Primary CTA behavior needs verification'
+      : flow.type === 'email_capture'
+        ? 'Waitlist/email capture appears unwired'
+        : flow.type === 'auth_flow'
+          ? 'Auth flow needs verification'
+          : flow.type === 'protected_route'
+            ? 'Protected routes need verification'
+            : flow.type === 'data_write'
+              ? 'Data write needs validation/error handling'
+              : flow.type === 'billing_checkout'
+                ? 'Billing/webhook flow needs verification'
+                : flow.type === 'destructive_action'
+                  ? 'Destructive action needs confirmation'
+                  : flow.type === 'dashboard_load'
+                    ? 'Dashboard states need verification'
+                    : 'Primary capture flow appears unwired';
+
+    findings.push({
+      category: flow.type === 'dashboard_load' ? 'soft_blocker' : 'hard_blocker_candidate',
+      issue,
+      severity: flow.severity,
+      certainty: flow.certainty,
+      evidence: flow.evidence.join(' '),
+      suggestedFix: flow.fix,
+    });
+  }
 
   for (const form of scan.suspiciousForms.slice(0, 3)) {
+    if (hasActionFlowType(scan.actionFlows, 'email_capture') || hasActionFlowType(scan.actionFlows, 'preorder') || hasActionFlowType(scan.actionFlows, 'book_demo') || hasActionFlowType(scan.actionFlows, 'contact_sales')) {
+      break;
+    }
+
     findings.push({
       category: 'hard_blocker_candidate',
       issue: 'Waitlist/form appears unwired',
@@ -224,6 +888,9 @@ function buildLaunchFindings(scan: Omit<ShipReadinessScan, 'projectType' | 'evid
   }
 
   for (const button of scan.suspiciousButtons.slice(0, 3)) {
+    if (hasActionFlowType(scan.actionFlows, 'cta_navigation')) break;
+    if (hasSaasDashboardSignals) break;
+
     findings.push({
       category: 'hard_blocker_candidate',
       issue: 'Primary CTA behavior needs verification',
@@ -234,7 +901,7 @@ function buildLaunchFindings(scan: Omit<ShipReadinessScan, 'projectType' | 'evid
     });
   }
 
-  if (!scan.metadata.hasOpenGraph || !scan.metadata.hasTwitter) {
+  if (!isDevtool && (!scan.metadata.hasOpenGraph || !scan.metadata.hasTwitter)) {
     findings.push({
       category: 'soft_blocker',
       issue: 'Missing OG/social metadata',
@@ -245,7 +912,7 @@ function buildLaunchFindings(scan: Omit<ShipReadinessScan, 'projectType' | 'evid
     });
   }
 
-  if (scan.analytics.length === 0) {
+  if (!isDevtool && scan.analytics.length === 0) {
     findings.push({
       category: 'soft_blocker',
       issue: 'No analytics detected',
@@ -256,7 +923,7 @@ function buildLaunchFindings(scan: Omit<ShipReadinessScan, 'projectType' | 'evid
     });
   }
 
-  if (!scan.publicFiles.hasRobotsTxt || !scan.publicFiles.hasSitemap) {
+  if (!isDevtool && (!scan.publicFiles.hasRobotsTxt || !scan.publicFiles.hasSitemap)) {
     findings.push({
       category: 'soft_blocker',
       issue: 'robots.txt or sitemap missing',
@@ -267,7 +934,7 @@ function buildLaunchFindings(scan: Omit<ShipReadinessScan, 'projectType' | 'evid
     });
   }
 
-  if (scan.heavyAssets.length > 0) {
+  if (!isDevtool && scan.heavyAssets.length > 0) {
     findings.push({
       category: 'soft_blocker',
       issue: 'Heavy media or animation needs performance QA',
@@ -306,6 +973,7 @@ function buildLaunchFindings(scan: Omit<ShipReadinessScan, 'projectType' | 'evid
 export async function runShipReadinessScan(root: string, reports: FileReport[]): Promise<ShipReadinessScan> {
   const packageScan = await readPackage(root);
   const sourceFiles = collectSourceFiles(root);
+  const projectFiles = collectProjectFiles(root);
 
   const testFiles: string[] = [];
   const routeFiles: string[] = [];
@@ -325,6 +993,46 @@ export async function runShipReadinessScan(root: string, reports: FileReport[]):
   const missingAltText: SourceFinding[] = [];
   const reducedMotion: SourceFinding[] = [];
   const riskyFiles: SourceFinding[] = [];
+  const captureSignals: SourceFinding[] = [];
+  const captureWiringSignals: SourceFinding[] = [];
+  const capturePartialSignals: SourceFinding[] = [];
+  const ctaSignals: SourceFinding[] = [];
+  const ctaWiringSignals: SourceFinding[] = [];
+  const devtool: DevtoolScan = {
+    binTargets: [],
+    missingBinTargets: [],
+    installCommands: [],
+    installCommandMismatches: [],
+    filesystemWrites: [],
+    unsafeFilesystemWrites: [],
+    cliExecutionSignals: [],
+    cliErrorHandlingSignals: [],
+    configUsage: [],
+    configValidationSignals: [],
+  };
+  const saasDashboard: SaasDashboardScan = {
+    authRouteSignals: [],
+    protectedRouteSignals: [],
+    authGuardSignals: [],
+    authPackageSignals: [],
+    dataWrites: [],
+    validationSignals: [],
+    errorHandlingSignals: [],
+    envValidationSignals: [],
+    billingSignals: [],
+    webhookSignatureSignals: [],
+    dashboardSignals: [],
+    dashboardStateSignals: [],
+    destructiveActions: [],
+    destructiveConfirmationSignals: [],
+  };
+  const packageDeps = new Set([...packageScan.dependencies, ...packageScan.devDependencies]);
+  for (const authDep of ['next-auth', 'clerk', '@clerk/nextjs', 'auth0', '@auth0/nextjs-auth0', 'supabase', '@supabase/supabase-js', 'firebase']) {
+    if (packageDeps.has(authDep)) pushFinding(saasDashboard.authPackageSignals, 'package.json', `${authDep} dependency detected.`);
+  }
+  for (const billingDep of ['stripe', '@stripe/stripe-js', 'paddle', '@paddle/paddle-js', 'lemonsqueezy']) {
+    if (packageDeps.has(billingDep)) pushFinding(saasDashboard.billingSignals, 'package.json', `${billingDep} dependency detected.`);
+  }
   const metadata = {
     hasMetadata: false,
     hasOpenGraph: false,
@@ -338,6 +1046,9 @@ export async function runShipReadinessScan(root: string, reports: FileReport[]):
     if (routeFile(path)) routeFiles.push(path);
     if (apiRouteFile(path)) apiRoutes.push(path);
     if (isHighConsequencePath(path)) pushFinding(riskyFiles, path, 'Path name suggests auth/payment/webhook/data-write consequence.');
+    if (AUTH_ROUTE_PATH_RE.test(path)) pushFinding(saasDashboard.authRouteSignals, path, 'Auth/login/signup/onboarding route detected.');
+    if (PROTECTED_ROUTE_PATH_RE.test(path)) pushFinding(saasDashboard.protectedRouteSignals, path, 'Protected dashboard/settings/account/admin/billing route detected.');
+    if (DASHBOARD_ROUTE_PATH_RE.test(path)) pushFinding(saasDashboard.dashboardSignals, path, 'Dashboard/admin/analytics/reports/metrics route detected.');
 
     let source = '';
     try {
@@ -345,8 +1056,70 @@ export async function runShipReadinessScan(root: string, reports: FileReport[]):
     } catch {
       continue;
     }
+    const codeOnlySource = stripStringAndRegexLiterals(source);
 
     if (/TODO|FIXME|HACK/.test(source)) pushFinding(todos, path, 'Contains TODO/FIXME/HACK comment.');
+    if (FILESYSTEM_WRITE_RE.test(source)) {
+      pushFinding(devtool.filesystemWrites, path, 'Filesystem write/delete/copy operation detected.');
+      if (!FILESYSTEM_SAFETY_RE.test(source)) {
+        pushFinding(devtool.unsafeFilesystemWrites, path, 'Filesystem write/delete/copy operation has no obvious dry-run, confirmation, backup, allowlist, diff, or rollback guard.');
+      }
+    }
+    if (CLI_EXECUTION_RE.test(source)) {
+      pushFinding(devtool.cliExecutionSignals, path, 'CLI command execution, shell/model/API call, or command parser signal detected.');
+      if (ERROR_HANDLING_RE.test(source)) {
+        pushFinding(devtool.cliErrorHandlingSignals, path, 'User-facing error handling signal detected.');
+      }
+    }
+    if (AUTH_GUARD_RE.test(source) || /(?:^|\/)middleware\.[tj]s$/.test(path)) {
+      pushFinding(saasDashboard.authGuardSignals, path, 'Auth/session/protected-route guard signal detected.');
+    }
+    if (DATA_WRITE_RE.test(source)) {
+      pushFinding(saasDashboard.dataWrites, path, 'Data write or mutating route/action signal detected.');
+    }
+    if (VALIDATION_RE.test(source)) {
+      pushFinding(saasDashboard.validationSignals, path, 'Input validation signal detected.');
+    }
+    if (USER_ERROR_RE.test(source)) {
+      pushFinding(saasDashboard.errorHandlingSignals, path, 'Error handling or user-facing error signal detected.');
+    }
+    if (ENV_VALIDATION_RE.test(source)) {
+      pushFinding(saasDashboard.envValidationSignals, path, 'Environment validation or helpful missing-env failure signal detected.');
+    }
+    if (BILLING_RE.test(source)) {
+      pushFinding(saasDashboard.billingSignals, path, 'Billing, checkout, subscription, invoice, payment, or webhook signal detected.');
+    }
+    if (WEBHOOK_SIGNATURE_RE.test(source)) {
+      pushFinding(saasDashboard.webhookSignatureSignals, path, 'Webhook signature verification signal detected.');
+    }
+    if (/chart|table|filter|date range|datatable|export|metrics|analytics|reports/i.test(source)) {
+      pushFinding(saasDashboard.dashboardSignals, path, 'Dashboard chart/table/filter/export/reporting signal detected.');
+    }
+    if (DASHBOARD_STATE_RE.test(source)) {
+      pushFinding(saasDashboard.dashboardStateSignals, path, 'Loading/error/empty/skeleton/fallback dashboard state signal detected.');
+    }
+    if (DESTRUCTIVE_ACTION_RE.test(source)) {
+      pushFinding(saasDashboard.destructiveActions, path, 'Destructive action copy or code signal detected.');
+    }
+    if (DESTRUCTIVE_CONFIRM_RE.test(source)) {
+      pushFinding(saasDashboard.destructiveConfirmationSignals, path, 'Confirmation, dialog, modal, alert, or undo signal detected.');
+    }
+    if (/process\.env|import\.meta\.env|config\.json|\.env|apiKey|provider|model/i.test(source)) {
+      pushFinding(devtool.configUsage, path, 'Config, env, API key, provider, or model setting usage detected.');
+      if (CONFIG_VALIDATION_RE.test(source)) {
+        pushFinding(devtool.configValidationSignals, path, 'Config validation or recovery-message signal detected.');
+      }
+    }
+    if (EMAIL_CAPTURE_RE.test(source) && (CAPTURE_COPY_RE.test(source) || /<form\b/i.test(source))) {
+      const flowType = detectFlowType(source);
+      pushFinding(captureSignals, path, `${flowType} flow: email input/state and capture-oriented copy or form behavior detected.`);
+      if (SUBMISSION_PATH_RE.test(source)) {
+        pushFinding(captureWiringSignals, path, 'Submission path signal detected for capture flow.');
+      } else if (PARTIAL_SUBMISSION_RE.test(source)) {
+        pushFinding(capturePartialSignals, path, 'Submit/local state handling detected, but no clear persistence or external submission path was found.');
+      }
+    }
+
     if (/<form\b/i.test(source)) {
       pushFinding(forms, path, 'Contains a form element.');
       const hasSubmitPath = /onSubmit\s*=|action\s*=|formAction\s*=|['"]use server['"]|fetch\s*\(|axios\.|navigator\.sendBeacon|emailjs|mailchimp|convertkit|supabase|firebase/i.test(source);
@@ -357,9 +1130,16 @@ export async function runShipReadinessScan(root: string, reports: FileReport[]):
       }
     }
 
-    const buttonMatches = source.match(/<button\b[^>]*>/gi) ?? [];
+    const buttonMatches = (source.match(/<button\b[^>]*>/gi) ?? [])
+      .filter(button => !button.includes('\\'));
     if (buttonMatches.length > 0) pushFinding(buttons, path, `${buttonMatches.length} button element(s) found.`);
     for (const button of buttonMatches) {
+      if (CTA_TEXT_RE.test(source)) {
+        pushFinding(ctaSignals, path, `CTA-oriented copy detected near button(s): ${button.slice(0, 120)}`);
+        if (NAVIGATION_RE.test(button) || /onClick\s*=|type\s*=\s*["']submit["']|formAction\s*=|disabled\b/i.test(button)) {
+          pushFinding(ctaWiringSignals, path, `CTA button has an explicit behavior signal: ${button.slice(0, 120)}`);
+        }
+      }
       if (!/onClick\s*=|type\s*=\s*["']submit["']|formAction\s*=|aria-label\s*=|disabled\b/i.test(button)) {
         pushFinding(suspiciousButtons, path, `Button may lack explicit behavior: ${button.slice(0, 120)}`);
       }
@@ -383,11 +1163,11 @@ export async function runShipReadinessScan(root: string, reports: FileReport[]):
     if (/process\.env|import\.meta\.env|NEXT_PUBLIC_|PUBLIC_/.test(source)) {
       pushFinding(envUsage, path, 'Environment variable usage detected.');
     }
-    if (/(window|document|localStorage|sessionStorage|navigator)\b/.test(source)) {
-      pushFinding(browserGlobals, path, 'Browser global usage detected.');
+    if (BROWSER_GLOBAL_CODE_RE.test(codeOnlySource)) {
+      pushFinding(browserGlobals, path, 'Browser API usage detected in runtime code.');
     }
-    if (/useEffect\s*\(/.test(source) && /(window|document|localStorage|sessionStorage|navigator)\b/.test(source)) {
-      pushFinding(useEffectBrowserCoupling, path, 'useEffect appears coupled to browser globals.');
+    if (/useEffect\s*\(/.test(codeOnlySource) && BROWSER_GLOBAL_CODE_RE.test(codeOnlySource)) {
+      pushFinding(useEffectBrowserCoupling, path, 'useEffect appears coupled to browser APIs.');
     }
     if (/<video\b|\.mp4|\.webm|\.mov|\.glb|\.gltf|three|@react-three|framer-motion|canvas\b|lottie/i.test(source)) {
       pushFinding(heavyAssets, path, 'Heavy media, animation, canvas, or 3D signal detected.');
@@ -398,6 +1178,34 @@ export async function runShipReadinessScan(root: string, reports: FileReport[]):
     }
     if (/prefers-reduced-motion|useReducedMotion|motion-reduce|reducedMotion/i.test(source)) {
       pushFinding(reducedMotion, path, 'Reduced-motion support signal detected.');
+    }
+  }
+
+  for (const entry of packageScan.binEntries) {
+    const targetPath = join(root, entry.target);
+    if (existsSync(targetPath)) {
+      pushFinding(devtool.binTargets, 'package.json', `${entry.command} -> ${entry.target} exists.`);
+    } else {
+      pushFinding(devtool.missingBinTargets, 'package.json', `${entry.command} -> ${entry.target} does not exist.`);
+    }
+  }
+
+  for (const fullPath of projectFiles) {
+    const path = relative(root, fullPath);
+    const normalizedPath = path.replace(/\\/g, '/');
+    const isDocumentationFile = /(^|\/)(readme|docs?|documentation)(?:\/|\.|$)/i.test(normalizedPath) || /\.(md|mdx)$/i.test(normalizedPath);
+    if (!isDocumentationFile) continue;
+    let source = '';
+    try {
+      source = await readFile(fullPath, 'utf8');
+    } catch {
+      continue;
+    }
+    for (const commandPackage of collectInstallCommands(source)) {
+      pushFinding(devtool.installCommands, path, `Install/run command references ${commandPackage}.`);
+      if (!packageNameMatchesDocumentedCommand(packageScan.name, commandPackage)) {
+        pushFinding(devtool.installCommandMismatches, path, `Documented package ${commandPackage} does not match package.json name ${packageScan.name ?? 'unknown'}.`);
+      }
     }
   }
 
@@ -435,18 +1243,43 @@ export async function runShipReadinessScan(root: string, reports: FileReport[]):
     missingAltText,
     reducedMotion,
     riskyFiles,
+    devtool,
+    saasDashboard,
   };
 
-  const launchFindings = buildLaunchFindings(baseScanWithoutFindings);
+  const actionFlows = [
+    ...buildActionFlows({
+      packageScan,
+      devtool,
+      captureSignals,
+      captureWiringSignals,
+      capturePartialSignals,
+      ctaSignals,
+      ctaWiringSignals,
+      suspiciousButtons,
+    }),
+    ...buildSaasDashboardActionFlows(saasDashboard),
+  ];
+
+  const launchFindings = buildLaunchFindings({
+    ...baseScanWithoutFindings,
+    actionFlows,
+  });
   const baseScan = {
     ...baseScanWithoutFindings,
+    actionFlows,
     launchFindings,
   };
 
-  const projectType = inferProjectType(baseScan);
+  const projectTypeDetection = detectProjectType(baseScan, projectFiles.map(file => relative(root, file)));
+  const projectType = projectTypeDetection.primaryType;
+  const scanWithDetection = {
+    ...baseScan,
+    projectTypeDetection,
+  };
   return {
     projectType,
-    ...baseScan,
-    evidence: buildEvidence(baseScan, projectType),
+    ...scanWithDetection,
+    evidence: buildEvidence(scanWithDetection, projectType),
   };
 }

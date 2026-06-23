@@ -5,8 +5,9 @@ import chalk from 'chalk';
 import Table from 'cli-table3';
 import boxen from 'boxen';
 import ora from 'ora';
-import { access, readFile, writeFile } from 'node:fs/promises';
-import { join, basename } from 'node:path';
+import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { join, basename, relative } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { analyse } from './analyst.js';
 import { saveReport } from './cache.js';
 import { runPreflight, rollback } from './preflight.js';
@@ -17,14 +18,16 @@ import type { ValidatorResult } from './validator.js';
 import { runCritic } from './critic.js';
 import { runLargeFileAdvisor } from './largeFileAdvisor.js';
 import { runPrePlannerGate, runRefactorGate } from './refactorGate.js';
-import { confirm } from '@inquirer/prompts';
+import { confirm, select } from '@inquirer/prompts';
 import { runDiffer } from './differ.js';
 import { runStaticSplit } from './splitter.js';
 import { runSecurityCheck } from './securityCheck.js';
 import { runShipReadinessScan } from './shipReadinessScan.js';
+import type { LaunchFinding, ShipReadinessScan } from './shipReadinessScan.js';
+import { manualOpenCommand, openFileInBrowser } from './localReportViewer.js';
 import { ZENO_MODELS } from './models.js';
 import type { ZenoConfig } from '../config.js';
-import type { HealthReport, RiskLevel, HealthLabel } from '../types.js';
+import type { HealthReport, RiskLevel, HealthLabel, ProjectType } from '../types.js';
 import { classifySelectedFiles } from './refactorViability.js';
 import { MAX_AUTONOMOUS_REFACTOR_LINES } from './refactorLimits.js';
 import { healthTone, riskTone, theme } from './theme.js';
@@ -75,7 +78,7 @@ Rules:
   - High: important user-facing flows, external APIs, email/webhooks, environment secrets, form submission, or business logic where failure reaches users but is usually reversible.
   - Medium: complex, large, or hard-to-maintain code where failure is localized, recoverable, or easy to detect.
   - Low: isolated, presentational, cosmetic, or straightforward code with low behavioral consequence.
-  Do not assign Critical for file size, lack of tests, browser globals, missing exports, or general messiness alone. Those can raise maintainability risk, but Critical requires severe consequence.
+  Do not assign Critical for file size, lack of tests, browser APIs, missing exports, or general messiness alone. Those can raise maintainability risk, but Critical requires severe consequence.
 - Treat Zeno as a refactor judgment system, not a generic code generator. Recommended actions should identify the smallest safe improvement, not broad rewrites.
 - Suggested actions should prefer bounded changes such as adding tests, extracting pure helpers, isolating validation, or naming risky boundaries. Avoid recommending large rewrites unless the provided summary makes them clearly safer than incremental work.
 - When a file has risky behavior, mention boundaries that should not be touched in the action or rationale, such as auth checks, webhook verification, mutation order, environment variable names, retry behavior, response status behavior, or permission checks.
@@ -97,7 +100,7 @@ Use exactly this structure:
   "label": <one of: "Critical" | "Concerning" | "Fair" | "Good">,
   "summary": <one sentence>,
   "reviewIntent": "ship_readiness",
-  "projectType": <one of: "landing_page" | "saas_app" | "dashboard" | "ecommerce_payment_app" | "auth_app" | "backend_api" | "cli_tooling" | "unknown">,
+  "projectType": <one of: "landing_page" | "saas_app" | "dashboard" | "devtool" | "backend_api" | "docs_site" | "ecommerce" | "unknown">,
   "confidence": <one of: "High" | "Medium" | "Low">,
   "founderSummary": <2-3 plain-English sentences for a founder>,
   "hardBlockers": [
@@ -136,51 +139,52 @@ Use exactly this structure:
   "privatePreview": { "answer": <"Yes" | "Maybe" | "No">, "reason": <one sentence> },
   "publicLaunch": { "answer": <"Yes" | "Maybe" | "No">, "reason": <one sentence> },
   "paidTraffic": { "answer": <"Yes" | "Maybe" | "No">, "reason": <one sentence> },
-  "files": [
-    {
-      "path": <relative file path>,
-      "risk": <one of: "Critical" | "High" | "Medium" | "Low">,
-      "legibility": <integer 1-10>,
-      "consequence": <one plain-English sentence>
-    }
-  ],
-  "observations": [<exactly 3 observations>],
-  "actions": [
-    { "instruction": <what to do>, "rationale": <why> }
-  ],
-  "start": <single safest next step>
+  "safestNextStep": <single safest next step>
 }
 
 Rules:
 - The review is about launch readiness first, code health second.
+- Allowed top-level keys are exactly: score, label, summary, reviewIntent, projectType, confidence, founderSummary, hardBlockers, softBlockers, codeOwnershipRisks, evidence, privatePreview, publicLaunch, paidTraffic, safestNextStep.
+- Do not return extra top-level keys. Do not return files, observations, actions, start, notes, markdown, commentary, or raw analysis.
+- Keep the response bounded: max 3 hardBlockers, max 4 softBlockers, max 3 codeOwnershipRisks, max 6 evidence items.
+- Keep every issue field concise: issue under 90 chars, evidence under 160 chars, risk under 180 chars, suggestedFix under 180 chars.
 - Prioritise real user-flow blockers before refactoring advice.
 - Do not recommend refactoring first if a main CTA, form, route, build/lint status, or payment/auth/data path is broken or unverified.
 - Every hardBlocker, softBlocker, and codeOwnershipRisk must cite evidence from the deterministic scan or file metadata.
 - The deterministic scan includes launchFindings with suggested category, severity, and certainty. Treat these as the default classification unless stronger evidence in the scan clearly contradicts them.
+- The deterministic scan may include actionFlows. These answer: "What is the user supposed to do, and can that action complete?" Treat action-flow findings as first-class launch evidence.
+- Do not collapse email/waitlist/preorder/contact/demo capture flows into generic CTA issues. If actionFlows or launchFindings show a capture flow risk, report it separately from generic CTA/navigation behavior.
 - If something is inferred, say "appears" or "not detected" instead of claiming certainty.
 - Every issue must include a certainty value:
   - confirmed: the deterministic scan directly proves it, such as missing metadata, missing robots.txt, no analytics detected, no tests detected, or a known script exists/missing.
   - likely: evidence strongly suggests it, such as a form submit path where no action, API route, server action, fetch/axios, or integration was detected.
   - needs_verification: suspicious code was found but behavior cannot be proven broken, such as a button without obvious onClick/href.
-  - inferred: risk is based on patterns, such as browser globals, heavy animation, or possible SSR/hydration risk.
-- For landing_page projects, prioritise CTA behavior, form submission, mobile readiness, metadata/social preview, analytics, performance, copy/brand consistency, and accessibility basics.
-- For saas_app, auth_app, ecommerce_payment_app, dashboard, or backend_api projects, prioritise auth, permissions, data writes, payment flow, webhooks, error states, tests, and security.
+  - inferred: risk is based on patterns, such as browser APIs in the wrong runtime, heavy animation, or runtime compatibility risk.
+- For landing_page projects, prioritise primary action flows first: email/waitlist/preorder capture, demo/contact requests, CTA navigation, download/install/docs paths, then mobile readiness, metadata/social preview, analytics, performance, copy/brand consistency, and accessibility basics.
+- For devtool projects, prioritise in this order: can users install/run the CLI, package.json bin resolves, documented install/npx commands match package.json name, filesystem writes are guarded, config/API key failures are validated clearly, errors are readable, and large/risky CLI files are maintainable.
+- For devtool projects, describe browser API findings as "Node runtime/browser API risk". Do not use frontend framework rendering terminology. Only report this risk when deterministic scan evidence shows actual runtime code using window/document/navigator, not when those terms appear in strings, prompts, types, or scanner regexes.
+- If package.json bin points to a missing file, treat "CLI bin target does not exist" as a Critical confirmed hard blocker.
+- If docs mention the wrong npx/npm/pnpm/bun install package, report "Install command may be wrong" as High likely.
+- If filesystem write/delete operations appear without dry-run, confirmation, backup, allowlist, diff, or rollback signals, report "Filesystem writes need safety guard" as a High needs_verification code ownership risk unless the scan evidence clearly shows it can directly damage user files during the main command path.
+- For saas_app projects, prioritise in this order: can users sign up/log in, protected routes are guarded, data writes are validated and handled safely, required env vars are validated, billing/payment/webhooks are safe if present, destructive actions are confirmed, loading/error/empty states exist, and code ownership risks are manageable.
+- For dashboard projects, prioritise in this order: dashboard data can load, loading/error/empty states are handled, tables/charts are usable, filters/export actions are safe, admin/protected routes are guarded, and destructive actions are confirmed.
+- For saas_app or dashboard projects, treat "Auth flow needs verification", "Protected routes need verification", "Data write needs validation/error handling", "Billing/webhook flow needs verification", and "Destructive action needs confirmation" as High needs_verification hard blocker candidates when present in deterministic launchFindings.
+- For saas_app or dashboard projects, treat "Required environment variables need validation" and "Dashboard states need verification" as soft blockers unless deterministic evidence proves a production break.
+- For ecommerce or backend_api projects, prioritise auth, permissions, data writes, payment flow, webhooks, error states, tests, and security.
 - Hard blocker means real users cannot complete the main flow, production can break, or launch would be misleading or unsafe. Only use hardBlockers for: main user action broken or very likely broken; form appears unwired; primary CTA appears unwired; build/lint/test command fails if actually executed or known; page likely cannot render; required env/config missing; auth/payment/database/webhook/data-write risk; severe mobile breakage; broken route/navigation.
-- If a form is found and there is no clear submission behavior, include a first-class hardBlocker candidate: "Waitlist/form appears unwired" with severity High and certainty likely or needs_verification. Use risk text like: "Users may think they joined the waitlist, but their email is lost."
+- If an email/waitlist/preorder/contact/demo capture flow is detected and no clear submission path exists, include a first-class hardBlocker candidate: "Waitlist/email capture appears unwired" or "Primary capture flow appears unwired" with severity High and certainty likely. Use risk text like: "Users may think they joined the waitlist, preordered, requested access, or contacted the team, but nothing is actually captured."
+- If capture flow submission logic is partial or unclear, keep it separate from CTA behavior and use certainty needs_verification.
 - If suspicious buttons or CTAs are found but behavior is not proven broken, use wording like "Primary CTA behavior needs verification" or "Potentially unwired button". Do not say "CTA is broken" unless evidence proves it.
 - Soft blocker means launch quality is weaker but the main flow can still work.
 - Do not classify these as hardBlockers by default: missing OG/social metadata, no analytics, no robots.txt, no sitemap, no tests for a landing page, general performance concern without measured failure, or general accessibility gap.
 - For landing pages, classify missing OG/social metadata as a softBlocker, Medium, confirmed. Classify no analytics as a softBlocker, Medium, confirmed. Classify missing robots.txt or sitemap as a softBlocker, Low or Medium, confirmed. Classify no tests/no test script as a codeOwnershipRisk, Low, confirmed.
 - Only elevate metadata or analytics if the provided evidence explicitly says public social launch, paid traffic, or campaign tracking is required.
 - Code ownership risk means future changes become dangerous or expensive.
-- Do not put large files, no tests, browser globals, or mixed concerns in hardBlockers unless they directly break launch. These usually belong in codeOwnershipRisks.
+- Do not put large files, no tests, browser API usage, or mixed concerns in hardBlockers unless they directly break launch. These usually belong in codeOwnershipRisks.
 - Score/label mapping: 1-3 Critical, 4-5 Concerning, 6-7 Fair, 8-10 Good.
-- Keep lists concise: at most 5 hardBlockers, 5 softBlockers, 5 codeOwnershipRisks, and 6 evidence bullets.
 - Prefer moving a finding to softBlockers or codeOwnershipRisks over inflating severity. Precision is more important than sounding dramatic.
-- files should contain 1-5 highest-risk files. Do not invent files.
-- observations must contain exactly 3 items.
-- actions must contain exactly 3 items.
-- start must be the safest next step for launch readiness, not broad cleanup. For landing pages with suspicious forms/CTAs, the safest next step is to verify and wire the form/CTA path before refactoring.`;
+- safestNextStep must be the safest next step for launch readiness, not broad cleanup. For landing pages with action-flow risks, the safest next step is to verify and wire the primary action flow first: capture flow and main CTAs before metadata, analytics, or refactoring.
+- Return valid JSON only. No markdown. No extra text before or after JSON.`;
 
 function modelForProvider(provider: ZenoConfig['provider']): string {
   return ZENO_MODELS[provider];
@@ -281,6 +285,801 @@ function shipAnswer(report: HealthReport): { answer: string; risk: string; color
   return { answer: 'Do not ship', risk: 'Critical risk', color: theme.danger };
 }
 
+function stripJsonFences(raw: string): string {
+  return raw.trim().replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/, '');
+}
+
+function parseHealthReport(raw: string): HealthReport {
+  return JSON.parse(stripJsonFences(raw)) as HealthReport;
+}
+
+function buildRepairPrompt(raw: string): string {
+  return `Your previous response was invalid or truncated JSON. Return a shorter valid JSON object using only these top-level keys: score, label, summary, reviewIntent, projectType, confidence, founderSummary, hardBlockers, softBlockers, codeOwnershipRisks, evidence, privatePreview, publicLaunch, paidTraffic, safestNextStep.
+
+No markdown. No extra keys. No text before or after JSON. Maximum 2 issues per section. Keep every field concise.
+
+Previous invalid response:
+${raw.slice(0, 6000)}`;
+}
+
+function launchFindingToIssue(finding: LaunchFinding): NonNullable<HealthReport['hardBlockers']>[number] {
+  const risk = finding.category === 'hard_blocker' || finding.category === 'hard_blocker_candidate'
+    ? 'The primary launch path may fail for real users.'
+    : finding.category === 'soft_blocker'
+      ? 'Launch quality or measurement may be weaker.'
+      : 'Future changes may be riskier or slower.';
+
+  return {
+    issue: finding.issue,
+    evidence: finding.evidence,
+    risk,
+    suggestedFix: finding.suggestedFix,
+    severity: finding.severity,
+    certainty: finding.certainty,
+  };
+}
+
+function fallbackReportFromScan(scan: ShipReadinessScan): HealthReport {
+  const hardBlockers = scan.launchFindings
+    .filter(finding => finding.category === 'hard_blocker' || finding.category === 'hard_blocker_candidate')
+    .map(launchFindingToIssue);
+  const softBlockers = scan.launchFindings
+    .filter(finding => finding.category === 'soft_blocker')
+    .map(launchFindingToIssue);
+  const codeOwnershipRisks = scan.launchFindings
+    .filter(finding => finding.category === 'code_ownership_risk')
+    .map(launchFindingToIssue);
+  const hasCritical = hardBlockers.some(issue => issue.severity === 'Critical');
+  const score = hasCritical ? 3 : hardBlockers.length > 0 ? 4 : softBlockers.length > 0 ? 6 : 8;
+  const label: HealthLabel = score <= 3 ? 'Critical' : score <= 5 ? 'Concerning' : score <= 7 ? 'Fair' : 'Good';
+  const primaryActionRisk = hardBlockers.find(issue => /capture|cta|entrypoint|form/i.test(issue.issue));
+
+  return {
+    score,
+    label,
+    summary: hardBlockers.length > 0
+      ? 'Deterministic scan found launch-path risks that should be fixed before public launch.'
+      : 'Deterministic scan found no hard launch blockers, but some launch quality and ownership risks may remain.',
+    reviewIntent: 'ship_readiness',
+    projectType: scan.projectType,
+    confidence: 'Medium',
+    founderSummary: hardBlockers.length > 0
+      ? 'Zeno could not format the AI report, so this fallback uses local scan findings. The primary launch path needs verification before public traffic.'
+      : 'Zeno could not format the AI report, so this fallback uses local scan findings. No hard blocker was detected locally.',
+    hardBlockers,
+    softBlockers,
+    codeOwnershipRisks,
+    evidence: scan.evidence.slice(0, 6),
+    privatePreview: {
+      answer: hardBlockers.length > 0 ? 'Maybe' : 'Yes',
+      reason: hardBlockers.length > 0 ? 'Private preview is possible after manually verifying the primary action flow.' : 'No local hard blocker was detected.',
+    },
+    publicLaunch: {
+      answer: hardBlockers.length > 0 ? 'No' : 'Maybe',
+      reason: hardBlockers.length > 0 ? 'Public launch should wait until hard blockers are fixed.' : 'Public launch still needs soft-blocker review.',
+    },
+    paidTraffic: {
+      answer: hardBlockers.length > 0 || softBlockers.some(issue => /analytics/i.test(issue.issue)) ? 'No' : 'Maybe',
+      reason: hardBlockers.length > 0 ? 'Paid traffic should wait until the primary action flow works.' : 'Paid traffic needs measurement and conversion checks.',
+    },
+    safestNextStep: primaryActionRisk
+      ? `Verify and wire the primary action flow first: ${primaryActionRisk.issue}. Do not refactor before the launch path works.`
+      : 'Verify the main user path manually before refactoring or sending public traffic.',
+  };
+}
+
+function localTimestamp(date = new Date()): string {
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, '0');
+  const dd = String(date.getDate()).padStart(2, '0');
+  const hh = String(date.getHours()).padStart(2, '0');
+  const min = String(date.getMinutes()).padStart(2, '0');
+  return `${yyyy}-${mm}-${dd}-${hh}-${min}`;
+}
+
+type ProjectTypeSource = 'detected' | 'saved' | 'user_confirmed' | 'changed_confirmed';
+
+interface ProjectConfig {
+  projectType: ProjectType;
+  confidence: number;
+  confidenceLabel: 'low' | 'medium' | 'high';
+  confirmedByUser: boolean;
+  signals: string[];
+  updatedAt: string;
+}
+
+interface ProjectTypeResolution {
+  projectType: ProjectType;
+  source: ProjectTypeSource;
+  confidence: number;
+  confidenceLabel: 'low' | 'medium' | 'high';
+  signals: string[];
+}
+
+const PROJECT_TYPE_LABELS: Record<ProjectType, string> = {
+  landing_page: 'Landing page',
+  saas_app: 'SaaS app',
+  dashboard: 'Dashboard',
+  devtool: 'Devtool',
+  backend_api: 'Backend/API',
+  docs_site: 'Docs site',
+  ecommerce: 'Ecommerce',
+  unknown: 'Unknown',
+};
+
+function formatProjectType(type: ProjectType): string {
+  return PROJECT_TYPE_LABELS[type] ?? type;
+}
+
+function formatConfidenceLabel(label: 'low' | 'medium' | 'high'): string {
+  if (label === 'high') return 'High confidence';
+  if (label === 'medium') return 'Medium confidence';
+  return 'Low confidence';
+}
+
+async function loadProjectConfig(root: string): Promise<ProjectConfig | null> {
+  try {
+    const raw = await readFile(join(root, '.zeno', 'project.json'), 'utf8');
+    const parsed = JSON.parse(raw) as Partial<ProjectConfig>;
+    if (!parsed.projectType) return null;
+    return {
+      projectType: parsed.projectType,
+      confidence: parsed.confidence ?? 0,
+      confidenceLabel: parsed.confidenceLabel ?? 'low',
+      confirmedByUser: Boolean(parsed.confirmedByUser),
+      signals: parsed.signals ?? [],
+      updatedAt: parsed.updatedAt ?? new Date().toISOString(),
+    };
+  } catch {
+    return null;
+  }
+}
+
+async function saveProjectConfig(root: string, config: ProjectConfig): Promise<void> {
+  const zenoDir = join(root, '.zeno');
+  await mkdir(zenoDir, { recursive: true });
+  await writeFile(join(zenoDir, 'project.json'), JSON.stringify(config, null, 2), 'utf8');
+}
+
+function hasStrongProjectTypeConflict(saved: ProjectConfig, scan: ShipReadinessScan): boolean {
+  const detection = scan.projectTypeDetection;
+  if (saved.projectType === detection.primaryType) return false;
+  if (detection.primaryType === 'unknown') return false;
+  const newScore = detection.scores[detection.primaryType] ?? 0;
+  const savedScore = detection.scores[saved.projectType] ?? 0;
+  return detection.confidenceLabel === 'high' && newScore >= 40 && newScore - savedScore >= 20;
+}
+
+async function askProjectType(args: {
+  message: string;
+  detection: ShipReadinessScan['projectTypeDetection'];
+  saved?: ProjectConfig;
+}): Promise<{ projectType: ProjectType; confirmedByUser: boolean }> {
+  const choices: Array<{ name: string; value: ProjectType | 'choose_detected' }> = [];
+  const seen = new Set<ProjectType>();
+
+  function pushType(type: ProjectType, suffix = ''): void {
+    if (seen.has(type)) return;
+    seen.add(type);
+    choices.push({ name: `${formatProjectType(type)}${suffix}`, value: type });
+  }
+
+  pushType(args.detection.primaryType);
+  for (const type of args.detection.secondaryTypes) pushType(type);
+  if (args.saved) pushType(args.saved.projectType, ` (keep saved)`);
+  for (const type of ['landing_page', 'saas_app', 'dashboard', 'devtool', 'backend_api', 'docs_site', 'ecommerce', 'unknown'] as ProjectType[]) {
+    pushType(type);
+  }
+  choices.push({ name: 'Mixed project', value: 'unknown' });
+  choices.push({ name: 'Not sure - choose for me', value: 'choose_detected' });
+
+  console.log(theme.caution(args.message));
+  if (args.detection.signals.length > 0) {
+    console.log(theme.muted('\nDetected signals:'));
+    for (const signal of args.detection.signals.slice(0, 5)) console.log(theme.muted(`  - ${signal}`));
+  }
+  if (args.detection.conflictingSignals.length > 0) {
+    console.log(theme.muted('\nMixed signals:'));
+    for (const signal of args.detection.conflictingSignals.slice(0, 5)) console.log(theme.muted(`  - ${signal}`));
+  }
+  console.log('');
+
+  const selected = await select<ProjectType | 'choose_detected'>({
+    message: 'What should Zeno review this as?',
+    choices,
+  });
+
+  if (selected === 'choose_detected') {
+    return { projectType: args.detection.primaryType, confirmedByUser: false };
+  }
+  return { projectType: selected, confirmedByUser: true };
+}
+
+async function resolveProjectType(root: string, scan: ShipReadinessScan): Promise<ProjectTypeResolution> {
+  const detection = scan.projectTypeDetection;
+  const saved = await loadProjectConfig(root);
+
+  if (saved && !hasStrongProjectTypeConflict(saved, scan)) {
+    console.log(theme.success(`✔ Using saved project type: ${formatProjectType(saved.projectType)}`));
+    return {
+      projectType: saved.projectType,
+      source: saved.confirmedByUser ? 'user_confirmed' : 'saved',
+      confidence: saved.confidence,
+      confidenceLabel: saved.confidenceLabel,
+      signals: saved.signals,
+    };
+  }
+
+  if (saved && hasStrongProjectTypeConflict(saved, scan)) {
+    const selected = await askProjectType({
+      message: `Project type may have changed.\n\nSaved: ${formatProjectType(saved.projectType)}\nNew: ${formatProjectType(detection.primaryType)} [${formatConfidenceLabel(detection.confidenceLabel)}]`,
+      detection,
+      saved,
+    });
+    const config: ProjectConfig = {
+      projectType: selected.projectType,
+      confidence: detection.confidence,
+      confidenceLabel: detection.confidenceLabel,
+      confirmedByUser: selected.confirmedByUser,
+      signals: detection.signals,
+      updatedAt: new Date().toISOString(),
+    };
+    await saveProjectConfig(root, config);
+    return {
+      projectType: selected.projectType,
+      source: 'changed_confirmed',
+      confidence: detection.confidence,
+      confidenceLabel: detection.confidenceLabel,
+      signals: detection.signals,
+    };
+  }
+
+  if (!detection.shouldAskUser) {
+    console.log(theme.success(`✔ Detected project type: ${formatProjectType(detection.primaryType)} [${formatConfidenceLabel(detection.confidenceLabel)}]`));
+    if (detection.signals.length > 0) {
+      console.log(theme.muted(`  Signals: ${detection.signals.slice(0, 3).join(', ')}`));
+    }
+    const config: ProjectConfig = {
+      projectType: detection.primaryType,
+      confidence: detection.confidence,
+      confidenceLabel: detection.confidenceLabel,
+      confirmedByUser: false,
+      signals: detection.signals,
+      updatedAt: new Date().toISOString(),
+    };
+    await saveProjectConfig(root, config);
+    return {
+      projectType: detection.primaryType,
+      source: 'detected',
+      confidence: detection.confidence,
+      confidenceLabel: detection.confidenceLabel,
+      signals: detection.signals,
+    };
+  }
+
+  const selected = await askProjectType({
+    message: 'This project looks mixed.',
+    detection,
+  });
+  const config: ProjectConfig = {
+    projectType: selected.projectType,
+    confidence: detection.confidence,
+    confidenceLabel: detection.confidenceLabel,
+    confirmedByUser: selected.confirmedByUser,
+    signals: detection.signals,
+    updatedAt: new Date().toISOString(),
+  };
+  await saveProjectConfig(root, config);
+  return {
+    projectType: selected.projectType,
+    source: selected.confirmedByUser ? 'user_confirmed' : 'detected',
+    confidence: detection.confidence,
+    confidenceLabel: detection.confidenceLabel,
+    signals: detection.signals,
+  };
+}
+
+async function saveShipReadinessLocalReport(args: {
+  root: string;
+  report: HealthReport;
+  fileCount: number;
+  scan: ShipReadinessScan | null;
+  projectTypeResolution?: ProjectTypeResolution;
+  provider: ZenoConfig['provider'];
+  model: string;
+  source: 'ai' | 'ai-retry' | 'deterministic-fallback';
+  malformedOutput?: string;
+}): Promise<{ jsonPath: string; htmlPath: string; csvPath: string; htmlFileUrl: string; htmlAbsolutePath: string }> {
+  const reportsDir = join(args.root, '.zeno', 'reports');
+  await mkdir(reportsDir, { recursive: true });
+  const timestamp = localTimestamp();
+  const jsonFilePath = join(reportsDir, `ship-readiness-${timestamp}.json`);
+  const htmlFilePath = join(reportsDir, `ship-readiness-${timestamp}.html`);
+  const csvFilePath = join(reportsDir, `ship-readiness-${timestamp}.csv`);
+  const htmlFileUrl = pathToFileURL(htmlFilePath).href;
+  const payload = {
+    savedAt: new Date().toISOString(),
+    source: args.source,
+    root: args.root,
+    fileCount: args.fileCount,
+    provider: args.provider,
+    model: args.model,
+    projectTypeResolution: args.projectTypeResolution,
+    report: args.report,
+    deterministicScan: args.scan,
+    malformedOutput: args.malformedOutput,
+  };
+  await writeFile(jsonFilePath, JSON.stringify(payload, null, 2), 'utf8');
+  await writeFile(csvFilePath, generateShipReadinessCsv(args.report), 'utf8');
+  await writeFile(htmlFilePath, generateShipReadinessHtml(payload, basename(csvFilePath), htmlFileUrl), 'utf8');
+  return {
+    jsonPath: relative(args.root, jsonFilePath),
+    htmlPath: relative(args.root, htmlFilePath),
+    csvPath: relative(args.root, csvFilePath),
+    htmlFileUrl,
+    htmlAbsolutePath: htmlFilePath,
+  };
+}
+
+type ShipReadinessSavedPayload = {
+  savedAt: string;
+  source: 'ai' | 'ai-retry' | 'deterministic-fallback';
+  root: string;
+  fileCount: number;
+  provider: ZenoConfig['provider'];
+  model: string;
+  projectTypeResolution?: ProjectTypeResolution;
+  report: HealthReport;
+  deterministicScan: ShipReadinessScan | null;
+  malformedOutput?: string;
+};
+
+function escapeHtml(value: unknown): string {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function paragraph(value: unknown): string {
+  return escapeHtml(value).replace(/\n/g, '<br>');
+}
+
+function csvCell(value: unknown): string {
+  return `"${String(value ?? '').replace(/"/g, '""')}"`;
+}
+
+function generateShipReadinessCsv(report: HealthReport): string {
+  const rows = [
+    ['category', 'issue', 'severity', 'certainty', 'evidence', 'risk', 'fix'],
+    ...(report.hardBlockers ?? []).map(issue => [
+      'hard_blocker',
+      issue.issue,
+      issue.severity,
+      issue.certainty ?? '',
+      issue.evidence,
+      issue.risk,
+      issue.suggestedFix,
+    ]),
+    ...(report.softBlockers ?? []).map(issue => [
+      'soft_blocker',
+      issue.issue,
+      issue.severity,
+      issue.certainty ?? '',
+      issue.evidence,
+      issue.risk,
+      issue.suggestedFix,
+    ]),
+    ...(report.codeOwnershipRisks ?? []).map(issue => [
+      'code_ownership_risk',
+      issue.issue,
+      issue.severity,
+      issue.certainty ?? '',
+      issue.evidence,
+      issue.risk,
+      issue.suggestedFix,
+    ]),
+  ];
+  return `${rows.map(row => row.map(csvCell).join(',')).join('\n')}\n`;
+}
+
+function sectionClass(title: string): string {
+  if (title.toLowerCase().includes('hard')) return 'hard';
+  if (title.toLowerCase().includes('soft')) return 'soft';
+  return 'ownership';
+}
+
+function emptyIssueMessage(title: string): string {
+  if (title.toLowerCase().includes('hard')) return 'No hard blockers found.';
+  if (title.toLowerCase().includes('soft')) return 'No soft blockers found.';
+  return 'No code ownership risks found.';
+}
+
+function issueList(title: string, issues: HealthReport['hardBlockers']): string {
+  const sectionTone = sectionClass(title);
+  if (!issues || issues.length === 0) {
+    return `<section class="section-card">
+      <div class="section-title"><h2>${escapeHtml(title)}</h2></div>
+      <div class="empty-state">${escapeHtml(emptyIssueMessage(title))}</div>
+    </section>`;
+  }
+  return `<section class="section-card">
+    <div class="section-title"><h2>${escapeHtml(title)}</h2><span>${issues.length}</span></div>
+    ${issues.map((issue, index) => `<article class="issue ${sectionTone} severity-border-${escapeHtml(issue.severity.toLowerCase())}">
+      <div class="issue-heading">
+        <h3>${index + 1}. ${escapeHtml(issue.issue)}</h3>
+        <div class="chips">
+          <span class="chip severity-${escapeHtml(issue.severity.toLowerCase())}">${escapeHtml(issue.severity)}</span>
+          ${issue.certainty ? `<span class="chip certainty">${escapeHtml(formatCertainty(issue.certainty))}</span>` : ''}
+        </div>
+      </div>
+      <div class="issue-body">
+        <div><span>Evidence</span><p>${paragraph(issue.evidence)}</p></div>
+        <div><span>Risk</span><p>${paragraph(issue.risk)}</p></div>
+        <div><span>Fix</span><p>${paragraph(issue.suggestedFix)}</p></div>
+      </div>
+    </article>`).join('')}
+  </section>`;
+}
+
+function deterministicFindingsHtml(scan: ShipReadinessScan | null): string {
+  if (!scan || scan.launchFindings.length === 0) {
+    return '<section class="section-card"><div class="section-title"><h2>Full deterministic findings</h2></div><div class="empty-state">No deterministic findings were saved.</div></section>';
+  }
+  return `<section class="section-card">
+    <div class="section-title"><h2>Full deterministic findings</h2><span>${scan.launchFindings.length}</span></div>
+    ${scan.launchFindings.map((finding, index) => `<article class="issue compact severity-border-${escapeHtml(finding.severity.toLowerCase())}">
+      <div class="issue-heading">
+        <h3>${index + 1}. ${escapeHtml(finding.issue)}</h3>
+      </div>
+      <div class="chips">
+        <span class="chip">${escapeHtml(finding.category.replace(/_/g, ' '))}</span>
+        <span class="chip severity-${escapeHtml(finding.severity.toLowerCase())}">${escapeHtml(finding.severity)}</span>
+        <span class="chip">${escapeHtml(formatCertainty(finding.certainty))}</span>
+      </div>
+      <p><strong>Evidence:</strong> ${paragraph(finding.evidence)}</p>
+      <p><strong>Fix:</strong> ${paragraph(finding.suggestedFix)}</p>
+    </article>`).join('')}
+  </section>`;
+}
+
+function decisionHtml(label: string, decision: HealthReport['privatePreview']): string {
+  if (!decision) return '';
+  return `<div class="decision"><strong>${escapeHtml(label)}</strong><span>${escapeHtml(decision.answer)}</span><p>${paragraph(decision.reason)}</p></div>`;
+}
+
+function generateShipReadinessHtml(payload: ShipReadinessSavedPayload, csvFileName: string, htmlFileUrl: string): string {
+  const { report, deterministicScan: scan } = payload;
+  const verdict = shipAnswer(report);
+  const hardBlockers = report.hardBlockers ?? [];
+  const softBlockers = report.softBlockers ?? [];
+  const codeOwnershipRisks = report.codeOwnershipRisks ?? [];
+  const projectName = basename(payload.root);
+  const date = new Date(payload.savedAt).toLocaleString('en-GB', {
+    day: '2-digit',
+    month: 'short',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+  const projectTypeBadge = payload.projectTypeResolution
+    ? payload.projectTypeResolution.source === 'saved'
+      ? 'Saved'
+      : payload.projectTypeResolution.source === 'user_confirmed' || payload.projectTypeResolution.source === 'changed_confirmed'
+        ? 'User confirmed'
+        : formatConfidenceLabel(payload.projectTypeResolution.confidenceLabel)
+    : report.confidence;
+  const safestNextStep = report.safestNextStep ?? report.start ?? '';
+  const founderSummary = report.founderSummary ?? report.summary ?? '';
+  const riskClass = verdict.risk.toLowerCase().replace(/[^a-z]+/g, '-');
+  const topIssues = [
+    ...hardBlockers.slice(0, 3).map(issue => ({ category: 'Hard', issue })),
+    ...softBlockers.slice(0, 3).map(issue => ({ category: 'Soft', issue })),
+    ...codeOwnershipRisks.slice(0, 3).map(issue => ({ category: 'Ownership', issue })),
+  ].slice(0, 6);
+
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ZENOAI Ship Readiness Report - ${escapeHtml(projectName)}</title>
+<style>
+  :root {
+    color-scheme: light;
+    --page-bg: #eef1f5;
+    --paper: #ffffff;
+    --paper-soft: #f8fafc;
+    --ink: #111827;
+    --muted: #5b6472;
+    --line: #d8dee8;
+    --line-strong: #b9c3d3;
+    --title: #0f172a;
+    --accent: #2563eb;
+    --critical: #991b1b;
+    --critical-bg: #fef2f2;
+    --high: #dc2626;
+    --high-bg: #fff1f2;
+    --medium: #b45309;
+    --medium-bg: #fffbeb;
+    --low: #15803d;
+    --low-bg: #f0fdf4;
+    --ownership: #0369a1;
+    --ownership-bg: #f0f9ff;
+    --shadow: 0 18px 50px rgba(15, 23, 42, .12);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: linear-gradient(180deg, #e8edf5 0, var(--page-bg) 340px, #f6f7fb 100%);
+    color: var(--ink);
+    font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+    font-size: 14px;
+    line-height: 1.52;
+    min-height: 100vh;
+  }
+  main {
+    width: min(100%, 980px);
+    margin: 30px auto;
+    padding: 38px 46px 52px;
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: 18px;
+    box-shadow: var(--shadow);
+  }
+  header {
+    display: flex;
+    gap: 24px;
+    align-items: flex-start;
+    justify-content: space-between;
+    padding: 26px;
+    margin-bottom: 24px;
+    border: 1px solid #c7d2fe;
+    border-radius: 16px;
+    background: linear-gradient(135deg, #eef2ff 0%, #f8fafc 58%, #eff6ff 100%);
+  }
+  h1 { margin: 4px 0 14px; color: var(--title); font-size: 34px; line-height: 1.08; letter-spacing: 0; }
+  h2 { margin: 0; color: var(--title); font-size: 20px; letter-spacing: 0; }
+  h3 { margin: 0; color: var(--title); font-size: 15px; letter-spacing: 0; }
+  p { margin: 8px 0; }
+  a { color: inherit; text-decoration: none; }
+  .meta, .muted { color: var(--muted); }
+  .kicker { color: var(--accent); font-size: 11px; font-weight: 800; letter-spacing: .16em; text-transform: uppercase; }
+  .actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: flex-end; }
+  .button {
+    appearance: none;
+    border: 1px solid var(--line);
+    background: #ffffff;
+    color: var(--title);
+    border-radius: 8px;
+    padding: 8px 12px;
+    font: inherit;
+    font-size: 12px;
+    font-weight: 650;
+    cursor: pointer;
+    transition: border-color .16s ease, background .16s ease;
+  }
+  .button:hover { border-color: var(--accent); background: #eff6ff; }
+  .button.primary { border-color: var(--accent); color: #ffffff; background: var(--accent); }
+  .hero-grid { display: grid; grid-template-columns: 1.35fr repeat(3, 1fr); gap: 12px; margin: 22px 0 18px; }
+  .card, .section-card, .summary, .issue {
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+  }
+  .card { padding: 15px 16px; min-height: 96px; background: var(--paper-soft); }
+  .verdict-card {
+    min-height: 132px;
+    border-width: 2px;
+    border-color: #bfdbfe;
+    background: linear-gradient(180deg, #eff6ff, #ffffff);
+  }
+  .risk-medium-risk { border-color: var(--medium); background: var(--medium-bg); }
+  .risk-high-risk, .risk-critical-risk { border-color: var(--high); background: var(--high-bg); }
+  .card-label { color: var(--muted); font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .1em; }
+  .card-value { margin-top: 8px; font-size: 18px; font-weight: 750; }
+  .verdict { color: var(--title); font-size: 32px; line-height: 1.05; }
+  .risk-badge {
+    display: inline-flex;
+    margin-top: 13px;
+    border: 1px solid var(--line-strong);
+    border-radius: 8px;
+    padding: 5px 9px;
+    color: var(--title);
+    background: #ffffff;
+    font-size: 12px;
+    font-weight: 700;
+  }
+  .section-card { padding: 20px 22px; margin-top: 18px; break-inside: avoid; }
+  .section-title { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 14px; }
+  .section-title span { color: var(--muted); border: 1px solid var(--line); border-radius: 8px; padding: 2px 8px; font-size: 12px; background: var(--paper-soft); }
+  .summary { position: relative; padding: 16px 18px; color: var(--ink); background: var(--paper-soft); }
+  .summary.with-action { padding-right: 88px; }
+  .copy-small { position: absolute; right: 12px; top: 12px; padding: 5px 9px; font-size: 12px; }
+  .summary-table, .top-table { width: 100%; border-collapse: collapse; overflow: hidden; border: 1px solid var(--line); border-radius: 10px; }
+  .summary-table th, .summary-table td, .top-table th, .top-table td { padding: 10px 12px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+  .summary-table th, .top-table th { color: var(--title); font-size: 11px; text-transform: uppercase; letter-spacing: .08em; background: #eef2f7; }
+  .summary-table tr:hover td, .top-table tr:hover td { background: #f8fafc; }
+  .summary-table tr:last-child td, .top-table tr:last-child td { border-bottom: 0; }
+  .chips { display: flex; gap: 8px; flex-wrap: wrap; }
+  .chip {
+    border: 1px solid var(--line);
+    border-radius: 7px;
+    padding: 3px 8px;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 750;
+    background: #ffffff;
+    white-space: nowrap;
+  }
+  .certainty { color: #4338ca; border-color: #c7d2fe; background: #eef2ff; }
+  .severity-critical { color: var(--critical); border-color: #fecaca; background: var(--critical-bg); }
+  .severity-high { color: var(--high); border-color: #fecaca; background: var(--high-bg); }
+  .severity-medium { color: var(--medium); border-color: #fde68a; background: var(--medium-bg); }
+  .severity-low { color: var(--low); border-color: #bbf7d0; background: var(--low-bg); }
+  .issue {
+    margin-bottom: 12px;
+    padding: 16px 18px;
+    border-left: 7px solid var(--line-strong);
+    break-inside: avoid;
+  }
+  .issue.hard { background: #fff7f7; border-color: #fecaca; }
+  .issue.soft { background: #fffbeb; border-color: #fde68a; }
+  .issue.ownership { background: var(--ownership-bg); border-color: #bae6fd; }
+  .severity-border-critical { border-left-color: var(--critical); }
+  .severity-border-high { border-left-color: var(--high); }
+  .severity-border-medium { border-left-color: var(--medium); }
+  .severity-border-low { border-left-color: var(--low); }
+  .issue-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 12px; }
+  .issue-body { display: grid; gap: 10px; }
+  .issue-body span { display: block; color: var(--muted); font-size: 10px; font-weight: 800; text-transform: uppercase; letter-spacing: .1em; }
+  .issue-body p { margin: 2px 0 0; color: var(--ink); }
+  .issue.compact p { margin: 6px 0; }
+  .decision { display: grid; grid-template-columns: 160px 72px 1fr; gap: 10px; align-items: start; padding: 12px 0; border-bottom: 1px solid var(--line); }
+  .decision:last-child { border-bottom: 0; }
+  .decision span { color: var(--accent); font-weight: 800; }
+  .decision p { margin: 0; color: var(--ink); }
+  .empty-state { border: 1px dashed var(--line-strong); border-radius: 10px; padding: 16px; color: var(--muted); background: var(--paper-soft); }
+  ul { padding-left: 22px; }
+  li { margin: 6px 0; }
+  code { background: #eef2f7; padding: 2px 5px; border-radius: 4px; }
+  @media (max-width: 820px) {
+    header, .issue-heading { flex-direction: column; }
+    .actions { justify-content: flex-start; }
+    .hero-grid { grid-template-columns: 1fr; }
+    .decision { grid-template-columns: 1fr; }
+    .summary.with-action { padding-right: 18px; padding-top: 54px; }
+  }
+  @media print {
+    @page { margin: 14mm; size: A4; }
+    body { background: #ffffff; color: #111827; font-size: 12px; }
+    main { width: auto; max-width: none; margin: 0; padding: 0; border: 0; border-radius: 0; box-shadow: none; }
+    header { padding: 18px; margin-bottom: 16px; border-color: #b7c4d8; background: #f8fafc; break-inside: avoid; }
+    .actions, .copy-small { display: none !important; }
+    .card, .section-card, .summary, .issue { box-shadow: none; break-inside: avoid; }
+    .hero-grid { grid-template-columns: repeat(4, 1fr); gap: 8px; }
+    .card { min-height: auto; padding: 10px; }
+    .verdict { font-size: 24px; }
+    .section-card { margin-top: 12px; padding: 14px; }
+    .issue { padding: 12px 14px; }
+    .top-table th, .top-table td, .summary-table th, .summary-table td { padding: 7px 8px; }
+    a { color: #111827; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <div class="kicker">ZENOAI</div>
+      <h1>Ship Readiness Report</h1>
+      <div class="meta">Project: ${escapeHtml(projectName)}</div>
+      <div class="meta">Date: ${escapeHtml(date)}</div>
+      <div class="meta">Provider: ${escapeHtml(payload.provider)} · Model: ${escapeHtml(payload.model)} · Source: ${escapeHtml(payload.source)}</div>
+    </div>
+    <div class="actions" aria-label="Report actions">
+      <button class="button primary" type="button" onclick="window.print()">Export PDF</button>
+      <a class="button" href="${escapeHtml(csvFileName)}" download>Export CSV</a>
+      <button class="button" type="button" data-copy="${escapeHtml(htmlFileUrl)}" onclick="copyText(this)">Copy report path</button>
+    </div>
+  </header>
+
+  <section class="hero-grid" aria-label="Report overview">
+    <div class="card verdict-card risk-${escapeHtml(riskClass)}"><div class="card-label">Verdict</div><div class="card-value verdict">${escapeHtml(verdict.answer)}</div><div class="risk-badge">${escapeHtml(verdict.risk)}</div></div>
+    <div class="card"><div class="card-label">Project type</div><div class="card-value">${escapeHtml(report.projectType ?? 'unknown')}${projectTypeBadge ? ` [${escapeHtml(projectTypeBadge)}]` : ''}</div></div>
+    <div class="card"><div class="card-label">Confidence</div><div class="card-value">${escapeHtml(report.confidence ?? 'Unknown')}</div></div>
+    <div class="card"><div class="card-label">Files reviewed</div><div class="card-value">${escapeHtml(payload.fileCount)}</div></div>
+  </section>
+
+  <section class="section-card">
+    <div class="section-title"><h2>Founder summary</h2></div>
+    <div class="summary with-action">
+      <button class="button copy-small" type="button" data-copy="${escapeHtml(founderSummary)}" onclick="copyText(this)">Copy</button>
+      ${paragraph(founderSummary)}
+    </div>
+  </section>
+
+  <section class="section-card">
+    <div class="section-title"><h2>Issue summary</h2></div>
+    <table class="summary-table">
+      <thead><tr><th>Category</th><th>Found</th></tr></thead>
+      <tbody>
+        <tr><td>Hard blockers</td><td>${hardBlockers.length}</td></tr>
+        <tr><td>Soft blockers</td><td>${softBlockers.length}</td></tr>
+        <tr><td>Code ownership risks</td><td>${codeOwnershipRisks.length}</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="section-card">
+    <div class="section-title"><h2>Top issues</h2></div>
+    ${topIssues.length > 0 ? `<table class="top-table">
+      <thead><tr><th>Category</th><th>Severity</th><th>Certainty</th><th>Issue</th></tr></thead>
+      <tbody>${topIssues.map(item => `<tr>
+        <td>${escapeHtml(item.category)}</td>
+        <td><span class="chip severity-${escapeHtml(item.issue.severity.toLowerCase())}">${escapeHtml(item.issue.severity)}</span></td>
+        <td>${item.issue.certainty ? `<span class="chip certainty">${escapeHtml(formatCertainty(item.issue.certainty))}</span>` : ''}</td>
+        <td>${escapeHtml(shortIssueLabel(item.issue.issue))}</td>
+      </tr>`).join('')}</tbody>
+    </table>` : '<div class="empty-state">No top issues found.</div>'}
+  </section>
+
+  ${issueList('Hard blockers', hardBlockers)}
+  ${issueList('Soft blockers', softBlockers)}
+  ${issueList('Code ownership risks', codeOwnershipRisks)}
+
+  <section class="section-card">
+    <div class="section-title"><h2>Evidence</h2></div>
+    ${(report.evidence ?? []).length > 0 ? `<ul>${(report.evidence ?? []).map(item => `<li>${paragraph(item)}</li>`).join('')}</ul>` : '<p class="muted">No evidence items were returned by the AI report.</p>'}
+  </section>
+
+  <section class="section-card">
+    <div class="section-title"><h2>Can ship?</h2></div>
+    ${decisionHtml('Private preview', report.privatePreview)}
+    ${decisionHtml('Public launch', report.publicLaunch)}
+    ${decisionHtml('Paid traffic', report.paidTraffic)}
+  </section>
+
+  <section class="section-card">
+    <div class="section-title"><h2>Safest next step</h2></div>
+    <div class="summary">${paragraph(safestNextStep)}</div>
+  </section>
+
+  ${deterministicFindingsHtml(scan)}
+</main>
+<script>
+function copyText(button) {
+  var text = button.getAttribute('data-copy') || '';
+  var original = button.textContent;
+  function done() {
+    button.textContent = 'Copied';
+    window.setTimeout(function () { button.textContent = original; }, 1400);
+  }
+  if (navigator.clipboard && window.isSecureContext) {
+    navigator.clipboard.writeText(text).then(done).catch(function () { fallbackCopy(text, done); });
+  } else {
+    fallbackCopy(text, done);
+  }
+}
+function fallbackCopy(text, done) {
+  var textarea = document.createElement('textarea');
+  textarea.value = text;
+  textarea.setAttribute('readonly', '');
+  textarea.style.position = 'fixed';
+  textarea.style.left = '-9999px';
+  document.body.appendChild(textarea);
+  textarea.select();
+  try { document.execCommand('copy'); done(); } catch (_) {}
+  document.body.removeChild(textarea);
+}
+</script>
+</body>
+</html>`;
+}
+
 export async function runOrchestrator(opts: RunOptions): Promise<void> {
   const normalizedAction = actionSlug(opts.action);
   console.log(chalk.dim(`action: ${normalizedAction}\n`));
@@ -363,7 +1162,7 @@ export async function runOrchestrator(opts: RunOptions): Promise<void> {
     console.log(theme.heading('AI review'));
     console.log(theme.muted(`  Provider : ${opts.config.provider}`));
     console.log(theme.muted(`  Model    : ${modelForProvider(opts.config.provider)}`));
-    console.log(theme.muted('  Calls    : 1 model call\n'));
+    console.log(theme.muted(`  Calls    : 1 model call${isShipReadinessAction(opts.action) ? ' + 1 formatting retry if needed' : ''}\n`));
 
     const proceedWithReview = await confirm({ message: 'Proceed with this AI review?', default: true });
     if (!proceedWithReview) {
@@ -416,9 +1215,18 @@ export async function runOrchestrator(opts: RunOptions): Promise<void> {
     const shipScan = isShipReadinessAction(opts.action)
       ? await runShipReadinessScan(root, allFiles)
       : null;
+    const projectTypeResolution = shipScan
+      ? await resolveProjectType(root, shipScan)
+      : undefined;
+    if (shipScan && projectTypeResolution) {
+      shipScan.projectType = projectTypeResolution.projectType;
+    }
 
     const userMessage = isShipReadinessAction(opts.action)
       ? `Review intent: ship_readiness
+
+Selected project type: ${projectTypeResolution?.projectType ?? shipScan?.projectType ?? 'unknown'}
+Project type source: ${projectTypeResolution?.source ?? 'detected'}
 
 Project file summary (${files.length} files):
 ${JSON.stringify(files, null, 2)}
@@ -433,7 +1241,7 @@ ${JSON.stringify(shipScan, null, 2)}`
         opts.config,
         userMessage,
         isShipReadinessAction(opts.action) ? SHIP_READINESS_PROMPT : SYSTEM_PROMPT,
-        isShipReadinessAction(opts.action) ? 2800 : 1500,
+        isShipReadinessAction(opts.action) ? 4200 : 1500,
       );
       clearSpinnerTimers();
       spinner.succeed(theme.heading('Zeno') + theme.muted(` — done (${elapsed}s)`));
@@ -457,17 +1265,61 @@ ${JSON.stringify(shipScan, null, 2)}`
 
 
     let report: HealthReport;
+    let reportSource: 'ai' | 'ai-retry' | 'deterministic-fallback' = 'ai';
+    let malformedOutput: string | undefined;
     try {
-      const cleaned = raw.trim().replace(/^```json\s*/i, '').replace(/^```\s*/i, '').replace(/\s*```$/, '');
-      report = JSON.parse(cleaned) as HealthReport;
-    } catch {
-      console.warn(chalk.yellow('Warning: could not parse structured report — showing raw output'));
-      console.log(raw);
-      process.exit(1);
+      report = parseHealthReport(raw);
+    } catch (firstParseErr) {
+      malformedOutput = raw;
+      if (isShipReadinessAction(opts.action)) {
+        console.log(theme.caution('Warning: AI report formatting failed. Retrying with a shorter schema...'));
+        try {
+          const repaired = await callAI(
+            opts.config,
+            buildRepairPrompt(raw),
+            SHIP_READINESS_PROMPT,
+            1800,
+          );
+          report = parseHealthReport(repaired);
+          reportSource = 'ai-retry';
+        } catch {
+          console.log(theme.caution('Warning: AI report formatting failed. Showing deterministic scan summary instead.'));
+          report = fallbackReportFromScan(shipScan as ShipReadinessScan);
+          reportSource = 'deterministic-fallback';
+        }
+      } else {
+        console.warn(chalk.yellow('Warning: could not parse structured report.'));
+        console.error(firstParseErr instanceof Error ? firstParseErr.message : String(firstParseErr));
+        process.exit(1);
+      }
     }
 
     if (isShipReadinessAction(opts.action)) {
-      printShipReadinessReport(report, root, files.length);
+      if (projectTypeResolution) {
+        report.projectType = projectTypeResolution.projectType;
+      }
+      const localReportPath = await saveShipReadinessLocalReport({
+        root,
+        report,
+        fileCount: files.length,
+        scan: shipScan,
+        projectTypeResolution,
+        provider: opts.config.provider,
+        model: modelForProvider(opts.config.provider),
+        source: reportSource,
+        malformedOutput,
+      });
+      printShipReadinessReport(report, root, files.length, localReportPath, shipScan, projectTypeResolution);
+      const openReport = await confirm({ message: 'Open full report in browser?', default: true });
+      if (openReport) {
+        try {
+          await openFileInBrowser(localReportPath.htmlAbsolutePath);
+          console.log(theme.success('Opened full report in your browser.'));
+        } catch {
+          console.log(theme.caution('Could not open the report automatically.'));
+          console.log(theme.muted(`Open manually: ${manualOpenCommand(localReportPath.htmlAbsolutePath)}`));
+        }
+      }
     } else {
       printReport(report, root, files.length, normalizedAction);
     }
@@ -563,17 +1415,48 @@ function printReport(report: HealthReport, root: string, fileCount: number, acti
   console.log(theme.divider('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
 }
 
-function printShipReadinessReport(report: HealthReport, root: string, fileCount: number): void {
+function printShipReadinessReport(
+  report: HealthReport,
+  root: string,
+  fileCount: number,
+  localReportPath: { jsonPath: string; htmlPath: string; csvPath: string; htmlFileUrl: string; htmlAbsolutePath: string },
+  scan: ShipReadinessScan | null,
+  projectTypeResolution?: ProjectTypeResolution,
+): void {
   const now = new Date();
   const date = now.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
   const time = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
   const datetime = `${date}, ${time}`;
   const verdict = shipAnswer(report);
+  const hardBlockers = report.hardBlockers ?? [];
+  const softBlockers = report.softBlockers ?? [];
+  const codeOwnershipRisks = report.codeOwnershipRisks ?? [];
+  const fullHardCount = Math.max(
+    hardBlockers.length,
+    scan?.launchFindings.filter(finding => finding.category === 'hard_blocker' || finding.category === 'hard_blocker_candidate').length ?? 0,
+  );
+  const fullSoftCount = Math.max(
+    softBlockers.length,
+    scan?.launchFindings.filter(finding => finding.category === 'soft_blocker').length ?? 0,
+  );
+  const fullOwnershipCount = Math.max(
+    codeOwnershipRisks.length,
+    scan?.launchFindings.filter(finding => finding.category === 'code_ownership_risk').length ?? 0,
+  );
 
   console.log(theme.title('━━━  ZENOAI — SHIP READINESS REPORT  ━━━'));
   console.log(theme.muted(`Project     : ${basename(root)}`));
   console.log(theme.muted('Reviewed by : Engineering Manager'));
-  if (report.projectType) console.log(theme.muted(`Project type: ${report.projectType}`));
+  if (report.projectType) {
+    const projectTypeBadge = projectTypeResolution
+      ? projectTypeResolution.source === 'saved'
+        ? 'Saved'
+        : projectTypeResolution.source === 'user_confirmed' || projectTypeResolution.source === 'changed_confirmed'
+          ? 'User confirmed'
+          : formatConfidenceLabel(projectTypeResolution.confidenceLabel)
+      : report.confidence;
+    console.log(theme.muted(`Project type: ${report.projectType}${projectTypeBadge ? ` [${projectTypeBadge}]` : ''}`));
+  }
   console.log(theme.muted(`Files       : ${fileCount}`));
   console.log(theme.muted(`Date        : ${datetime}\n`));
 
@@ -589,17 +1472,14 @@ function printShipReadinessReport(report: HealthReport, root: string, fileCount:
   console.log(theme.heading('Founder summary'));
   console.log(`  ${theme.muted(report.founderSummary ?? report.summary)}\n`);
 
-  printShipIssues('Hard blockers', report.hardBlockers);
-  printShipIssues('Soft blockers', report.softBlockers);
-  printShipIssues('Code ownership risks', report.codeOwnershipRisks);
-
-  if (report.evidence && report.evidence.length > 0) {
-    console.log(theme.heading('Evidence'));
-    report.evidence.slice(0, 6).forEach((item, index) => {
-      console.log(`  ${theme.heading(`${index + 1}.`)} ${theme.muted(item)}`);
-    });
-    console.log('');
-  }
+  printShipIssueSummary(fullHardCount, fullSoftCount, fullOwnershipCount, hardBlockers.length, softBlockers.length, codeOwnershipRisks.length);
+  printTopIssuesTable(hardBlockers, softBlockers, codeOwnershipRisks);
+  printShipIssues('Hard blockers', hardBlockers, 3);
+  printMoreIssues('hard blocker', fullHardCount, Math.min(hardBlockers.length, 3));
+  printShipIssues('Soft blockers', softBlockers, 3);
+  printMoreIssues('soft blocker', fullSoftCount, Math.min(softBlockers.length, 3));
+  printShipIssues('Code ownership risks', codeOwnershipRisks, 3);
+  printMoreIssues('code ownership risk', fullOwnershipCount, Math.min(codeOwnershipRisks.length, 3));
 
   if (report.privatePreview || report.publicLaunch || report.paidTraffic) {
     console.log(theme.heading('Can ship?'));
@@ -613,20 +1493,27 @@ function printShipReadinessReport(report: HealthReport, root: string, fileCount:
       console.log(`  ${theme.heading('Paid traffic:')}    ${formatShipDecision(report.paidTraffic.answer)} ${theme.muted(report.paidTraffic.reason)}`);
     }
     console.log('');
-  } else if (report.files && report.files.length > 0) {
-    console.log(theme.heading('What is blocking shipment'));
-    report.files.slice(0, 3).forEach((file, index) => {
-      console.log(`  ${theme.heading(`${index + 1}.`)} ${theme.file(file.path)} ${riskColor(file.risk)}`);
-      console.log(`     ${theme.muted(file.consequence)}`);
-    });
-    console.log('');
   }
 
-  if (report.start) {
+  const safestNextStep = report.safestNextStep ?? report.start;
+  if (safestNextStep) {
     console.log(theme.heading('Safest next step'));
-    console.log(`  ${theme.text(report.start)}\n`);
+    console.log(`  ${theme.text(safestNextStep)}\n`);
   }
 
+  if (scan && scan.launchFindings.length > 0) {
+    console.log(theme.muted(`Deterministic findings saved: ${scan.launchFindings.length} launch finding${scan.launchFindings.length === 1 ? '' : 's'}`));
+  }
+  console.log(theme.success('Full report saved:'));
+  console.log(theme.muted(`JSON: ${localReportPath.jsonPath}`));
+  console.log(theme.muted(`HTML: ${localReportPath.htmlPath}`));
+  console.log(theme.muted(`CSV: ${localReportPath.csvPath}`));
+  console.log('');
+  console.log(theme.heading('View full report:'));
+  console.log(theme.info(localReportPath.htmlFileUrl));
+  console.log('');
+  console.log(theme.heading('Or open manually:'));
+  console.log(theme.muted(manualOpenCommand(localReportPath.htmlAbsolutePath)));
   console.log(theme.divider('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
 }
 
@@ -636,11 +1523,111 @@ function formatShipDecision(answer: 'Yes' | 'Maybe' | 'No'): string {
   return theme.danger('No');
 }
 
-function printShipIssues(title: string, issues: HealthReport['hardBlockers']): void {
+function printShipIssueSummary(
+  hardCount: number,
+  softCount: number,
+  ownershipCount: number,
+  hardShowing: number,
+  softShowing: number,
+  ownershipShowing: number,
+): void {
+  console.log(theme.heading('Issue summary'));
+  const table = new Table({
+    head: [theme.heading('Category'), theme.heading('Found'), theme.heading('Showing')],
+    colWidths: [24, 10, 10],
+    style: { head: [], border: ['dim'] },
+  });
+  table.push(
+    [theme.text('Hard blockers'), String(hardCount), String(Math.min(hardShowing, 3))],
+    [theme.text('Soft blockers'), String(softCount), String(Math.min(softShowing, 3))],
+    [theme.text('Code ownership risks'), String(ownershipCount), String(Math.min(ownershipShowing, 3))],
+  );
+  console.log(table.toString());
+  console.log('');
+}
+
+function printTopIssuesTable(
+  hardBlockers: NonNullable<HealthReport['hardBlockers']>,
+  softBlockers: NonNullable<HealthReport['softBlockers']>,
+  codeOwnershipRisks: NonNullable<HealthReport['codeOwnershipRisks']>,
+): void {
+  const rows = [
+    ...hardBlockers.slice(0, 3).map(issue => ({ category: 'Hard', issue })),
+    ...softBlockers.slice(0, 3).map(issue => ({ category: 'Soft', issue })),
+    ...codeOwnershipRisks.slice(0, 3).map(issue => ({ category: 'Ownership', issue })),
+  ];
+
+  if (rows.length === 0) return;
+
+  console.log(theme.heading('Top issues'));
+  const table = new Table({
+    head: [
+      theme.heading('Category'),
+      theme.heading('Severity'),
+      theme.heading('Certainty'),
+      theme.heading('Issue'),
+    ],
+    colWidths: [12, 12, 22, 48],
+    wordWrap: true,
+    style: { head: [], border: ['dim'] },
+  });
+
+  for (const row of rows) {
+    table.push([
+      theme.text(row.category),
+      riskColor(row.issue.severity),
+      theme.muted(row.issue.certainty ? formatCertainty(row.issue.certainty) : ''),
+      theme.text(shortIssueLabel(row.issue.issue)),
+    ]);
+  }
+
+  console.log(table.toString());
+  console.log('');
+}
+
+function pluralize(label: string, count: number): string {
+  if (count === 1) return label;
+  if (label === 'code ownership risk') return 'code ownership risks';
+  return `${label}s`;
+}
+
+function printMoreIssues(label: string, count: number, showing: number): void {
+  const remaining = count - showing;
+  if (remaining > 0) {
+    console.log(theme.muted(`+ ${remaining} more ${pluralize(label, remaining)} in full local report`));
+    console.log('');
+  }
+}
+
+function shortIssueLabel(issue: string): string {
+  const lower = issue.toLowerCase();
+  if (/capture|waitlist|email|form/.test(lower) && /unwired|verification|appears/.test(lower)) return 'Capture flow unwired';
+  if (/cta|button/.test(lower)) return 'CTA needs verification';
+  if (/og|social|twitter|metadata/.test(lower)) return 'Missing social metadata';
+  if (/analytics/.test(lower)) return 'No analytics';
+  if (/heavy|animation|media|performance|mobile/.test(lower)) return 'Mobile perf risk';
+  if (/large file|monolith|lines/.test(lower)) return 'Large page file';
+  if (/browser global|browser api|node runtime/.test(lower)) return 'Node/browser API risk';
+  if (/test/.test(lower)) return 'No tests';
+  if (/robots|sitemap/.test(lower)) return 'SEO files missing';
+  if (/bin target/.test(lower)) return 'Bin target missing';
+  if (/install command/.test(lower)) return 'Install command wrong';
+  if (/filesystem/.test(lower)) return 'FS safety guard';
+  if (/config validation|config/.test(lower)) return 'Config validation';
+  if (/error handling/.test(lower)) return 'CLI error handling';
+  if (/cli|entrypoint|bin/.test(lower)) return 'CLI entrypoint';
+  return issue.length > 42 ? `${issue.slice(0, 39)}...` : issue;
+}
+
+function printShipIssues(
+  title: string,
+  issues: HealthReport['hardBlockers'],
+  limit = 3,
+): void {
   if (!issues || issues.length === 0) return;
 
   console.log(theme.heading(title));
-  issues.slice(0, 5).forEach((item, index) => {
+  issues.slice(0, limit).forEach((item, index) => {
     const certainty = item.certainty ? ` [${formatCertainty(item.certainty)}]` : '';
     console.log(`  ${theme.heading(`${index + 1}.`)} ${theme.text(item.issue)} ${riskColor(item.severity)}${theme.muted(certainty)}`);
     console.log(`     ${theme.muted('Evidence:')} ${theme.muted(item.evidence)}`);
