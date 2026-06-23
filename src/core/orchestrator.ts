@@ -21,6 +21,7 @@ import { confirm } from '@inquirer/prompts';
 import { runDiffer } from './differ.js';
 import { runStaticSplit } from './splitter.js';
 import { runSecurityCheck } from './securityCheck.js';
+import { runShipReadinessScan } from './shipReadinessScan.js';
 import { ZENO_MODELS } from './models.js';
 import type { ZenoConfig } from '../config.js';
 import type { HealthReport, RiskLevel, HealthLabel } from '../types.js';
@@ -81,19 +82,103 @@ Rules:
 - It is acceptable to recommend skipping a file when a refactor would be mostly cosmetic or the safe next step is tests/observability instead of code movement.
 - The "start" field must always recommend the highest-consequence safe next step, not the easiest one. Prioritise tests or small protective changes around payments, auth, data writes, webhooks, external APIs, environment secrets, and critical user flows. Never recommend logging cleanup or formatting changes when untested business logic exists.`;
 
+const SHIP_READINESS_PROMPT = `You are Zeno, a launch-readiness and code-ownership reviewer for JavaScript and TypeScript projects, especially AI-generated or vibe-coded apps.
+
+You will receive:
+1. compact file metadata, and
+2. a deterministic ship-readiness scan with repo facts.
+
+Return ONLY a valid JSON object. No markdown, no backticks, no preamble.
+
+Use exactly this structure:
+
+{
+  "score": <integer 1-10>,
+  "label": <one of: "Critical" | "Concerning" | "Fair" | "Good">,
+  "summary": <one sentence>,
+  "reviewIntent": "ship_readiness",
+  "projectType": <one of: "landing_page" | "saas_app" | "dashboard" | "ecommerce_payment_app" | "auth_app" | "backend_api" | "cli_tooling" | "unknown">,
+  "confidence": <one of: "High" | "Medium" | "Low">,
+  "founderSummary": <2-3 plain-English sentences for a founder>,
+  "hardBlockers": [
+    {
+      "issue": <specific problem>,
+      "evidence": <specific scan evidence or file reference>,
+      "risk": <what breaks for real users or production>,
+      "suggestedFix": <smallest practical fix>,
+      "severity": <one of: "Critical" | "High" | "Medium" | "Low">
+    }
+  ],
+  "softBlockers": [
+    {
+      "issue": <specific problem>,
+      "evidence": <specific scan evidence or file reference>,
+      "risk": <launch quality risk>,
+      "suggestedFix": <smallest practical fix>,
+      "severity": <one of: "Critical" | "High" | "Medium" | "Low">
+    }
+  ],
+  "codeOwnershipRisks": [
+    {
+      "issue": <specific maintainability risk>,
+      "evidence": <specific scan evidence or file reference>,
+      "risk": <why future changes become risky>,
+      "suggestedFix": <smallest practical fix>,
+      "severity": <one of: "Critical" | "High" | "Medium" | "Low">
+    }
+  ],
+  "evidence": [
+    <short evidence bullet>
+  ],
+  "privatePreview": { "answer": <"Yes" | "Maybe" | "No">, "reason": <one sentence> },
+  "publicLaunch": { "answer": <"Yes" | "Maybe" | "No">, "reason": <one sentence> },
+  "paidTraffic": { "answer": <"Yes" | "Maybe" | "No">, "reason": <one sentence> },
+  "files": [
+    {
+      "path": <relative file path>,
+      "risk": <one of: "Critical" | "High" | "Medium" | "Low">,
+      "legibility": <integer 1-10>,
+      "consequence": <one plain-English sentence>
+    }
+  ],
+  "observations": [<exactly 3 observations>],
+  "actions": [
+    { "instruction": <what to do>, "rationale": <why> }
+  ],
+  "start": <single safest next step>
+}
+
+Rules:
+- The review is about launch readiness first, code health second.
+- Prioritise real user launch blockers before refactoring advice.
+- Do not recommend refactoring first if a main CTA, form, route, build/lint status, or payment/auth/data path is broken or unverified.
+- Every hardBlocker, softBlocker, and codeOwnershipRisk must cite evidence from the deterministic scan or file metadata.
+- If something is inferred, say "appears" or "not detected" instead of claiming certainty.
+- For landing_page projects, prioritise CTA behavior, form submission, mobile readiness, metadata/social preview, analytics, performance, copy/brand consistency, and accessibility basics.
+- For saas_app, auth_app, ecommerce_payment_app, dashboard, or backend_api projects, prioritise auth, permissions, data writes, payment flow, webhooks, error states, tests, and security.
+- Hard blocker means real users cannot complete the main flow, production can break, or launch would be misleading or unsafe.
+- Soft blocker means launch quality is weaker but the main flow can still work.
+- Code ownership risk means future changes become dangerous or expensive.
+- Score/label mapping: 1-3 Critical, 4-5 Concerning, 6-7 Fair, 8-10 Good.
+- Keep lists concise: at most 5 hardBlockers, 5 softBlockers, 5 codeOwnershipRisks, and 6 evidence bullets.
+- files should contain 1-5 highest-risk files. Do not invent files.
+- observations must contain exactly 3 items.
+- actions must contain exactly 3 items.
+- start must be the safest next step for launch readiness, not broad cleanup.`;
+
 function modelForProvider(provider: ZenoConfig['provider']): string {
   return ZENO_MODELS[provider];
 }
 
-async function callAI(config: ZenoConfig, userMessage: string): Promise<string> {
+async function callAI(config: ZenoConfig, userMessage: string, systemPrompt = SYSTEM_PROMPT, maxTokens = 1500): Promise<string> {
   const { provider, apiKey } = config;
 
   if (provider === 'anthropic') {
     const client = new Anthropic({ apiKey });
     const response = await client.messages.create({
       model: ZENO_MODELS.anthropic,
-      max_tokens: 1500,
-      system: SYSTEM_PROMPT,
+      max_tokens: maxTokens,
+      system: systemPrompt,
       messages: [{ role: 'user', content: userMessage }],
     });
     const block = response.content[0];
@@ -105,7 +190,7 @@ async function callAI(config: ZenoConfig, userMessage: string): Promise<string> 
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({
       model: ZENO_MODELS.gemini,
-      systemInstruction: SYSTEM_PROMPT,
+      systemInstruction: systemPrompt,
     });
     const result = await model.generateContent(userMessage);
     return result.response.text();
@@ -115,9 +200,9 @@ async function callAI(config: ZenoConfig, userMessage: string): Promise<string> 
     const client = new OpenAI({ apiKey });
     const response = await client.responses.create({
       model: ZENO_MODELS.openai,
-      max_output_tokens: 1500,
+      max_output_tokens: maxTokens,
       input: [
-        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'system', content: systemPrompt },
         { role: 'user', content: userMessage },
       ],
     });
@@ -133,9 +218,9 @@ async function callAI(config: ZenoConfig, userMessage: string): Promise<string> 
     });
     const response = await client.chat.completions.create({
       model: ZENO_MODELS.openrouter,
-      max_tokens: 1500,
+      max_tokens: maxTokens,
       messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'system', content: systemPrompt },
         { role: 'user', content: userMessage },
       ],
     });
@@ -312,11 +397,28 @@ export async function runOrchestrator(opts: RunOptions): Promise<void> {
       if (lateTimer) clearTimeout(lateTimer);
     }
 
-    const userMessage = `Project file summary (${files.length} files):\n\n${JSON.stringify(files, null, 2)}`;
+    const shipScan = isShipReadinessAction(opts.action)
+      ? await runShipReadinessScan(root, allFiles)
+      : null;
+
+    const userMessage = isShipReadinessAction(opts.action)
+      ? `Review intent: ship_readiness
+
+Project file summary (${files.length} files):
+${JSON.stringify(files, null, 2)}
+
+Deterministic ship-readiness scan:
+${JSON.stringify(shipScan, null, 2)}`
+      : `Project file summary (${files.length} files):\n\n${JSON.stringify(files, null, 2)}`;
 
     let raw: string;
     try {
-      raw = await callAI(opts.config, userMessage);
+      raw = await callAI(
+        opts.config,
+        userMessage,
+        isShipReadinessAction(opts.action) ? SHIP_READINESS_PROMPT : SYSTEM_PROMPT,
+        isShipReadinessAction(opts.action) ? 2800 : 1500,
+      );
       clearSpinnerTimers();
       spinner.succeed(theme.heading('Zeno') + theme.muted(` — done (${elapsed}s)`));
     } catch (err) {
@@ -455,17 +557,47 @@ function printShipReadinessReport(report: HealthReport, root: string, fileCount:
   console.log(theme.title('━━━  ZENOAI — SHIP READINESS REPORT  ━━━'));
   console.log(theme.muted(`Project     : ${basename(root)}`));
   console.log(theme.muted('Reviewed by : Engineering Manager'));
+  if (report.projectType) console.log(theme.muted(`Project type: ${report.projectType}`));
   console.log(theme.muted(`Files       : ${fileCount}`));
   console.log(theme.muted(`Date        : ${datetime}\n`));
 
-  console.log(theme.muted('Is this code safe to ship?'));
+  console.log(theme.heading('Verdict'));
   console.log(`${chalk.bold(verdict.color(verdict.answer))}  ${verdict.color(`[${verdict.risk}]`)}`);
   console.log('');
 
-  console.log(theme.heading('Why'));
-  console.log(`  ${theme.muted(report.summary)}\n`);
+  if (report.confidence) {
+    console.log(theme.heading('Confidence'));
+    console.log(`  ${theme.text(report.confidence)}\n`);
+  }
 
-  if (report.files && report.files.length > 0) {
+  console.log(theme.heading('Founder summary'));
+  console.log(`  ${theme.muted(report.founderSummary ?? report.summary)}\n`);
+
+  printShipIssues('Hard blockers', report.hardBlockers);
+  printShipIssues('Soft blockers', report.softBlockers);
+  printShipIssues('Code ownership risks', report.codeOwnershipRisks);
+
+  if (report.evidence && report.evidence.length > 0) {
+    console.log(theme.heading('Evidence'));
+    report.evidence.slice(0, 6).forEach((item, index) => {
+      console.log(`  ${theme.heading(`${index + 1}.`)} ${theme.muted(item)}`);
+    });
+    console.log('');
+  }
+
+  if (report.privatePreview || report.publicLaunch || report.paidTraffic) {
+    console.log(theme.heading('Can ship?'));
+    if (report.privatePreview) {
+      console.log(`  ${theme.heading('Private preview:')} ${formatShipDecision(report.privatePreview.answer)} ${theme.muted(report.privatePreview.reason)}`);
+    }
+    if (report.publicLaunch) {
+      console.log(`  ${theme.heading('Public launch:')}   ${formatShipDecision(report.publicLaunch.answer)} ${theme.muted(report.publicLaunch.reason)}`);
+    }
+    if (report.paidTraffic) {
+      console.log(`  ${theme.heading('Paid traffic:')}    ${formatShipDecision(report.paidTraffic.answer)} ${theme.muted(report.paidTraffic.reason)}`);
+    }
+    console.log('');
+  } else if (report.files && report.files.length > 0) {
     console.log(theme.heading('What is blocking shipment'));
     report.files.slice(0, 3).forEach((file, index) => {
       console.log(`  ${theme.heading(`${index + 1}.`)} ${theme.file(file.path)} ${riskColor(file.risk)}`);
@@ -480,6 +612,25 @@ function printShipReadinessReport(report: HealthReport, root: string, fileCount:
   }
 
   console.log(theme.divider('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
+}
+
+function formatShipDecision(answer: 'Yes' | 'Maybe' | 'No'): string {
+  if (answer === 'Yes') return theme.success('Yes');
+  if (answer === 'Maybe') return theme.caution('Maybe');
+  return theme.danger('No');
+}
+
+function printShipIssues(title: string, issues: HealthReport['hardBlockers']): void {
+  if (!issues || issues.length === 0) return;
+
+  console.log(theme.heading(title));
+  issues.slice(0, 5).forEach((item, index) => {
+    console.log(`  ${theme.heading(`${index + 1}.`)} ${theme.text(item.issue)} ${riskColor(item.severity)}`);
+    console.log(`     ${theme.muted('Evidence:')} ${theme.muted(item.evidence)}`);
+    console.log(`     ${theme.muted('Risk:')} ${theme.muted(item.risk)}`);
+    console.log(`     ${theme.muted('Fix:')} ${theme.muted(item.suggestedFix)}`);
+  });
+  console.log('');
 }
 
 function legibilityColor(score: number): string {
