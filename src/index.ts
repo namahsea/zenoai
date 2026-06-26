@@ -1,4 +1,4 @@
-import { select, confirm } from '@inquirer/prompts';
+import { confirm } from '@inquirer/prompts';
 import chalk from 'chalk';
 import { existsSync, readFileSync } from 'node:fs';
 import { writeFile, mkdir, readdir, readFile, stat } from 'node:fs/promises';
@@ -14,6 +14,7 @@ import { generateHtml } from './core/htmlExporter.js';
 import { resetHistory } from './core/history.js';
 import { manualOpenCommand, openFileInBrowser } from './core/localReportViewer.js';
 import { theme } from './core/theme.js';
+import { numberedActionPrompt } from './core/actionPrompt.js';
 
 const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
 
@@ -337,12 +338,9 @@ async function main() {
   const config = await ensureConfig();
 
   const projectName = basename(process.cwd());
-  const action = await select({
-    message: `What do you want Zeno to do for ${projectName}?\n`,
-    choices: ZENO_ACTIONS.map((a) => ({
-      value: a.value,
-      description: a.description,
-    })),
+  const action = await numberedActionPrompt({
+    message: `What do you want Zeno to do for ${projectName}?`,
+    choices: ZENO_ACTIONS,
   });
 
   console.log('');
