@@ -25,6 +25,8 @@ export interface SourceFinding {
   evidence: string;
 }
 
+type FileRole = 'runtime' | 'layout' | 'docs' | 'draft' | 'fixture' | 'config' | 'test';
+
 export interface LaunchFinding {
   category: 'hard_blocker' | 'hard_blocker_candidate' | 'soft_blocker' | 'code_ownership_risk';
   issue: string;
@@ -178,10 +180,12 @@ const PROTECTED_ROUTE_PATH_RE = /(?:^|\/)(dashboard|settings|account|admin|billi
 const DASHBOARD_ROUTE_PATH_RE = /(?:^|\/)(dashboard|admin|analytics|reports|metrics)(?:\/|\.|$)/i;
 const AUTH_GUARD_RE = /\b(?:middleware|getServerSession|auth\s*\(|currentUser|requireAuth|withAuth|useSession|redirect\s*\([^)]*(?:login|sign-in|signin|auth)|session\s*\?|session\s*&&|user\s*\?|user\s*&&)\b/i;
 const DATA_WRITE_RE = /\b(?:prisma\.\w+\.(?:create|update|delete|upsert)|db\.(?:insert|update|delete)|drizzle\.(?:insert|update|delete)|\.from\s*\([^)]*\)\.(?:insert|update|delete|upsert)|fetch\s*\([^)]*method\s*:\s*['"`](?:POST|PUT|PATCH|DELETE)['"`]|export\s+async\s+function\s+(?:POST|PUT|PATCH|DELETE)\b|['"]use server['"])/is;
+const SERVER_DATA_WRITE_RE = /\b(?:prisma\.\w+\.(?:create|update|delete|upsert)|db\.(?:insert|update|delete)|drizzle\.(?:insert|update|delete)|\.from\s*\([^)]*\)\.(?:insert|update|delete|upsert)|export\s+async\s+function\s+(?:POST|PUT|PATCH|DELETE)\b|['"]use server['"])/is;
 const VALIDATION_RE = /\b(?:zod|yup|valibot|superstruct|schema\.(?:parse|safeParse)|safeParse\s*\(|parse\s*\(|required|if\s*\([^)]*(?:email|name|id|userId|workspaceId|amount|price|plan|role)[^)]*\))/i;
 const USER_ERROR_RE = /\b(?:try\s*\{|\.catch\s*\(|catch\s*\(|return\s+(?:NextResponse\.)?json\s*\([^)]*error|throw new Error|toast\.(?:error|warning)|setError|errorBoundary|ErrorBoundary)\b/i;
 const ENV_VALIDATION_RE = /\b(?:env\.safeParse|envSchema|createEnv|zod.*process\.env|requiredEnv|validateEnv|assertEnv|throw new Error\([^)]*(?:env|environment|DATABASE_URL|STRIPE|CLERK|AUTH|SUPABASE)|if\s*\(\s*!process\.env\.)/is;
 const BILLING_RE = /\b(?:stripe|paddle|lemonsqueezy|checkout|billing|subscription|invoice|payment|webhook)\b/i;
+const BILLING_EXECUTABLE_RE = /\b(?:stripe|paddle|lemonsqueezy|paypal|checkout\.sessions|paymentIntents|constructEvent|stripe-signature|webhookSecret|STRIPE_SECRET_KEY|STRIPE_WEBHOOK_SECRET|PADDLE_|LEMONSQUEEZY_|createCheckout|checkoutSession|subscriptionId)\b/i;
 const WEBHOOK_SIGNATURE_RE = /\b(?:constructEvent|webhookSignature|signature|svix|stripe-signature|verifyWebhook|verifySignature)\b/i;
 const DASHBOARD_STATE_RE = /\b(?:loading|error|empty|skeleton|spinner|fallback|no data|not found|isLoading|isError|isPending|Suspense)\b/i;
 const DESTRUCTIVE_ACTION_RE = /\b(?:delete|remove|revoke|disconnect|archive|reset|cancel subscription|downgrade)\b/i;
@@ -310,6 +314,66 @@ function pushFinding(target: SourceFinding[], path: string, evidence: string, li
   target.push({ path, evidence });
 }
 
+function classifyFileRole(path: string): FileRole {
+  const normalized = path.replace(/\\/g, '/').toLowerCase();
+  const base = basename(normalized);
+  if (TEST_RE.test(normalized)) return 'test';
+  if (/(^|\/)(fixtures?|examples?|__mocks__|mock-data)(\/|$)/.test(normalized)) return 'fixture';
+  if (/(^|\/)(landing-page-copy|product-brief|copy|drafts?|notes?|scratch|planning|prd|roadmap)(?:[./_-]|$)/.test(normalized)) return 'draft';
+  if (/\.(md|mdx)$/.test(normalized) || /(^|\/)(docs?|documentation|guides?)(\/|$)/.test(normalized) || /^readme\.mdx?$/.test(base)) return 'docs';
+  if (/package\.json$|tsconfig|astro\.config|next\.config|vite\.config|tailwind\.config|eslint|biome|\.env/.test(normalized)) return 'config';
+  if (/(^|\/)(layout|baselayout|head|app)\.(astro|tsx|ts|jsx|js)$/.test(normalized) || /(^|\/)(layouts?|components?)\//.test(normalized)) return 'layout';
+  return 'runtime';
+}
+
+function isExecutableRole(role: FileRole): boolean {
+  return role === 'runtime' || role === 'layout' || role === 'config';
+}
+
+function hasAstroOrHtmlOpenGraph(source: string): boolean {
+  return /<meta\b[^>]*(?:property|name)\s*=\s*["']og:[^"']+["'][^>]*>/i.test(source);
+}
+
+function hasAstroOrHtmlTwitterMetadata(source: string): boolean {
+  return /<meta\b[^>]*(?:name|property)\s*=\s*["']twitter:[^"']+["'][^>]*>/i.test(source);
+}
+
+function hasAnyMetadata(source: string): boolean {
+  return includesAny(source, [
+    /export\s+const\s+metadata\s*=/,
+    /<Head\b/,
+    /metadataBase/i,
+    /openGraph/i,
+    /twitter/i,
+    /<title\b/i,
+    /<meta\b[^>]*(?:name|property)\s*=\s*["'](?:description|og:[^"']+|twitter:[^"']+)["'][^>]*>/i,
+  ]);
+}
+
+function buttonHasExplicitBehavior(button: string, source: string): boolean {
+  if (/onClick\s*=|type\s*=\s*["']submit["']|formAction\s*=|disabled\b|popovertarget\s*=|data-[\w-]*(?:toggle|target|state|open)\s*=/i.test(button)) return true;
+  const ariaControls = button.match(/aria-controls\s*=\s*["']([^"']+)["']/i)?.[1];
+  if (ariaControls && new RegExp(`id\\s*=\\s*["']${ariaControls.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}["']`, 'i').test(source)) return true;
+  const id = button.match(/id\s*=\s*["']([^"']+)["']/i)?.[1];
+  if (id && new RegExp(`getElementById\\(\\s*["']${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}["']\\s*\\)|querySelector\\(\\s*["']#${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}["']\\s*\\)`, 'i').test(source)) return true;
+  return false;
+}
+
+function hasExecutableBillingEvidence(path: string, source: string, role: FileRole, deps: Set<string>): boolean {
+  if (!isExecutableRole(role)) return false;
+  const hasPaymentDependency = ['stripe', '@stripe/stripe-js', 'paddle', '@paddle/paddle-js', 'lemonsqueezy', 'paypal', '@paypal/react-paypal-js'].some(dep => deps.has(dep));
+  if (hasPaymentDependency && BILLING_RE.test(source)) return true;
+  if (/(^|\/)(api|app\/api|pages\/api|server|routes?)\/.*(?:checkout|billing|payment|webhook|subscription|invoice)/i.test(path)) return true;
+  return BILLING_EXECUTABLE_RE.test(source);
+}
+
+function hasDataWriteEvidence(path: string, source: string, role: FileRole): boolean {
+  if (!isExecutableRole(role)) return false;
+  if (SERVER_DATA_WRITE_RE.test(source)) return true;
+  if (!DATA_WRITE_RE.test(source)) return false;
+  return apiRouteFile(path) || /(?:^|\/)(server|api|actions?|routes?)\//i.test(path);
+}
+
 function hasActionFlowType(flows: ActionFlowFinding[], type: ActionFlowType): boolean {
   return flows.some(flow => flow.type === type);
 }
@@ -364,6 +428,7 @@ function buildActionFlows(args: {
   captureSignals: SourceFinding[];
   captureWiringSignals: SourceFinding[];
   capturePartialSignals: SourceFinding[];
+  captureEnvEndpointSignals: SourceFinding[];
   ctaSignals: SourceFinding[];
   ctaWiringSignals: SourceFinding[];
   suspiciousButtons: SourceFinding[];
@@ -375,8 +440,11 @@ function buildActionFlows(args: {
     const type = detectFlowType(primaryCapture.evidence);
     const hasClearSubmissionPath = args.captureWiringSignals.length > 0;
     const hasPartialSubmissionLogic = args.capturePartialSignals.length > 0;
+    const hasEnvBackedEndpoint = args.captureEnvEndpointSignals.length > 0;
     const status: ActionFlowStatus = hasClearSubmissionPath
-      ? 'wired'
+      ? hasEnvBackedEndpoint
+        ? 'needs_verification'
+        : 'wired'
       : 'likely_unwired';
 
     if (status !== 'wired') {
@@ -392,14 +460,23 @@ function buildActionFlows(args: {
         status,
         severity: 'High',
         certainty: status === 'likely_unwired' ? 'likely' : 'needs_verification',
-        evidence: [
-          `${primaryCapture.path}: ${primaryCapture.evidence}`,
-          hasPartialSubmissionLogic
-            ? `${args.capturePartialSignals[0].path}: ${args.capturePartialSignals[0].evidence}`
-            : 'No fetch/API route/server action/form action/database/email integration was detected.',
-        ],
-        risk: 'Users may think they joined the waitlist, preordered, requested access, or contacted the team, but nothing is actually captured.',
-        fix: 'Wire the flow to an API route, server action, database, email platform, CRM, webhook, or disable/rename the CTA before launch.',
+        evidence: hasEnvBackedEndpoint
+          ? [
+              `${primaryCapture.path}: ${primaryCapture.evidence}`,
+              `${args.captureEnvEndpointSignals[0].path}: Capture submission depends on an environment-configured endpoint.`,
+            ]
+          : [
+              `${primaryCapture.path}: ${primaryCapture.evidence}`,
+              hasPartialSubmissionLogic
+                ? `${args.capturePartialSignals[0].path}: ${args.capturePartialSignals[0].evidence}`
+                : 'No fetch/API route/server action/form action/database/email integration was detected.',
+            ],
+        risk: hasEnvBackedEndpoint
+          ? 'The capture flow can work, but production may silently miss leads if the endpoint environment variable is absent or misconfigured.'
+          : 'Users may think they joined the waitlist, preordered, requested access, or contacted the team, but nothing is actually captured.',
+        fix: hasEnvBackedEndpoint
+          ? 'Confirm the production signup/contact endpoint env var is configured, or wire the form to an owned API route/server action before launch.'
+          : 'Wire the flow to an API route, server action, database, email platform, CRM, webhook, or disable/rename the CTA before launch.',
       });
     }
   }
@@ -608,12 +685,18 @@ function detectProjectType(
   const scores: Partial<Record<ProjectType, number>> = {};
   const signalsByType: Partial<Record<ProjectType, string[]>> = {};
   const deps = new Set([...scan.package.dependencies, ...scan.package.devDependencies]);
+  const executableProjectFiles = projectFiles.filter(file => isExecutableRole(classifyFileRole(file)));
+  const docsProjectFiles = projectFiles.filter(file => {
+    const role = classifyFileRole(file);
+    return role === 'docs' || role === 'draft';
+  });
   const allPaths = [
-    ...projectFiles.map(file => file.replace(/\\/g, '/')),
+    ...executableProjectFiles.map(file => file.replace(/\\/g, '/')),
     ...scan.routeFiles,
     ...scan.apiRoutes,
     ...scan.riskyFiles.map(item => item.path),
   ].join('\n').toLowerCase();
+  const docsPaths = docsProjectFiles.map(file => file.replace(/\\/g, '/')).join('\n').toLowerCase();
   const allEvidence = [
     ...scan.forms.map(item => item.evidence),
     ...scan.suspiciousForms.map(item => item.evidence),
@@ -641,7 +724,7 @@ function detectProjectType(
   if (['next-auth', 'clerk', '@clerk/nextjs', 'auth0', '@auth0/nextjs-auth0', 'supabase', '@supabase/supabase-js', 'firebase', 'prisma', '@prisma/client', 'drizzle-orm', 'mongoose', 'postgres', 'mysql', 'mysql2', 'sqlite', 'better-sqlite3'].some(dep => deps.has(dep))) {
     addScore(scores, signalsByType, 'saas_app', 22, 'auth or database package detected');
   }
-  if (['stripe', '@stripe/stripe-js', 'paddle', '@paddle/paddle-js', 'lemonsqueezy'].some(dep => deps.has(dep)) || /billing|subscription|invoice/.test(allPaths + '\n' + allEvidence)) {
+  if (['stripe', '@stripe/stripe-js', 'paddle', '@paddle/paddle-js', 'lemonsqueezy'].some(dep => deps.has(dep)) || scan.saasDashboard.billingSignals.length > 0) {
     addScore(scores, signalsByType, 'saas_app', 10, 'billing or subscription signal detected');
   }
   if (/\b(user|session|workspace|organization|team|invite|permission)\b/.test(allPaths + '\n' + allEvidence)) {
@@ -661,7 +744,7 @@ function detectProjectType(
   if (['commander', 'yargs', 'cac', 'oclif', '@oclif/core', '@inquirer/prompts', 'inquirer', 'prompts', 'chalk', 'execa'].some(dep => deps.has(dep))) {
     addScore(scores, signalsByType, 'devtool', 20, 'CLI/devtool package detected');
   }
-  if (/bin\/|(^|\/)(cli|bin|commands?)\.[tj]sx?$|commands\/|cli|command|npx|install|usage|get started/.test(allPaths + '\n' + allEvidence)) {
+  if (/bin\/|(^|\/)(cli|bin|commands?)\.[tj]sx?$|commands\/|cli|command/.test(allPaths) || /\b(?:npx|install|usage)\b/.test(docsPaths)) {
     addScore(scores, signalsByType, 'devtool', 12, 'install, usage, command, or CLI copy detected');
   }
   if (scan.devtool.binTargets.length > 0 || scan.devtool.missingBinTargets.length > 0) {
@@ -681,10 +764,10 @@ function detectProjectType(
     addScore(scores, signalsByType, 'backend_api', 14, 'data-write or high-consequence server path detected');
   }
 
-  if (/docs|documentation|api-reference|getting-started|guide|mdx?$/i.test(allPaths)) {
+  if (/docs|documentation|api-reference|getting-started|guide|mdx?$/i.test(docsPaths + '\n' + allPaths)) {
     addScore(scores, signalsByType, 'docs_site', 24, 'docs, guide, API reference, or markdown route detected');
   }
-  if (/getting started|installation|api reference|docs navigation|sidebar/i.test(allPaths + '\n' + allEvidence)) {
+  if (/getting started|installation|api reference|docs navigation|sidebar/i.test(docsPaths + '\n' + allEvidence)) {
     addScore(scores, signalsByType, 'docs_site', 16, 'documentation copy or navigation signal detected');
   }
 
@@ -694,7 +777,7 @@ function detectProjectType(
   if (['stripe', '@stripe/stripe-js', 'paddle', '@paddle/paddle-js', 'lemonsqueezy', 'paypal', '@paypal/react-paypal-js'].some(dep => deps.has(dep))) {
     addScore(scores, signalsByType, 'ecommerce', 26, 'payment provider package detected');
   }
-  if (/webhook|invoice|subscription|payment intent|checkout session/.test(allPaths + '\n' + allEvidence)) {
+  if (scan.saasDashboard.billingSignals.length > 0) {
     addScore(scores, signalsByType, 'ecommerce', 16, 'payment, webhook, invoice, or subscription signal detected');
   }
 
@@ -844,10 +927,13 @@ function buildLaunchFindings(scan: Omit<ShipReadinessScan, 'projectType' | 'proj
     if (flow.status === 'wired' || flow.status === 'not_detected') continue;
     if (['cli_install', 'cli_entrypoint', 'filesystem_write_safety', 'config_loading', 'command_execution'].includes(flow.type)) continue;
 
+    const captureEndpointNeedsVerification = flow.type === 'email_capture' && /environment-configured endpoint|endpoint env var|production signup/i.test(flow.evidence.join(' ') + ' ' + flow.fix);
     const issue = flow.type === 'cta_navigation'
       ? 'Primary CTA behavior needs verification'
       : flow.type === 'email_capture'
-        ? 'Waitlist/email capture appears unwired'
+        ? captureEndpointNeedsVerification
+          ? 'Capture endpoint needs production verification'
+          : 'Waitlist/email capture appears unwired'
         : flow.type === 'auth_flow'
           ? 'Auth flow needs verification'
           : flow.type === 'protected_route'
@@ -996,6 +1082,7 @@ export async function runShipReadinessScan(root: string, reports: FileReport[]):
   const captureSignals: SourceFinding[] = [];
   const captureWiringSignals: SourceFinding[] = [];
   const capturePartialSignals: SourceFinding[] = [];
+  const captureEnvEndpointSignals: SourceFinding[] = [];
   const ctaSignals: SourceFinding[] = [];
   const ctaWiringSignals: SourceFinding[] = [];
   const devtool: DevtoolScan = {
@@ -1042,6 +1129,8 @@ export async function runShipReadinessScan(root: string, reports: FileReport[]):
 
   for (const fullPath of sourceFiles) {
     const path = relative(root, fullPath);
+    const role = classifyFileRole(path);
+    const executable = isExecutableRole(role);
     if (TEST_RE.test(path)) testFiles.push(path);
     if (routeFile(path)) routeFiles.push(path);
     if (apiRouteFile(path)) apiRoutes.push(path);
@@ -1059,52 +1148,52 @@ export async function runShipReadinessScan(root: string, reports: FileReport[]):
     const codeOnlySource = stripStringAndRegexLiterals(source);
 
     if (/TODO|FIXME|HACK/.test(source)) pushFinding(todos, path, 'Contains TODO/FIXME/HACK comment.');
-    if (FILESYSTEM_WRITE_RE.test(source)) {
+    if (executable && FILESYSTEM_WRITE_RE.test(source)) {
       pushFinding(devtool.filesystemWrites, path, 'Filesystem write/delete/copy operation detected.');
       if (!FILESYSTEM_SAFETY_RE.test(source)) {
         pushFinding(devtool.unsafeFilesystemWrites, path, 'Filesystem write/delete/copy operation has no obvious dry-run, confirmation, backup, allowlist, diff, or rollback guard.');
       }
     }
-    if (CLI_EXECUTION_RE.test(source)) {
+    if (executable && CLI_EXECUTION_RE.test(source)) {
       pushFinding(devtool.cliExecutionSignals, path, 'CLI command execution, shell/model/API call, or command parser signal detected.');
       if (ERROR_HANDLING_RE.test(source)) {
         pushFinding(devtool.cliErrorHandlingSignals, path, 'User-facing error handling signal detected.');
       }
     }
-    if (AUTH_GUARD_RE.test(source) || /(?:^|\/)middleware\.[tj]s$/.test(path)) {
+    if (executable && (AUTH_GUARD_RE.test(source) || /(?:^|\/)middleware\.[tj]s$/.test(path))) {
       pushFinding(saasDashboard.authGuardSignals, path, 'Auth/session/protected-route guard signal detected.');
     }
-    if (DATA_WRITE_RE.test(source)) {
+    if (hasDataWriteEvidence(path, source, role)) {
       pushFinding(saasDashboard.dataWrites, path, 'Data write or mutating route/action signal detected.');
     }
-    if (VALIDATION_RE.test(source)) {
+    if (executable && VALIDATION_RE.test(source)) {
       pushFinding(saasDashboard.validationSignals, path, 'Input validation signal detected.');
     }
-    if (USER_ERROR_RE.test(source)) {
+    if (executable && USER_ERROR_RE.test(source)) {
       pushFinding(saasDashboard.errorHandlingSignals, path, 'Error handling or user-facing error signal detected.');
     }
-    if (ENV_VALIDATION_RE.test(source)) {
+    if (executable && ENV_VALIDATION_RE.test(source)) {
       pushFinding(saasDashboard.envValidationSignals, path, 'Environment validation or helpful missing-env failure signal detected.');
     }
-    if (BILLING_RE.test(source)) {
-      pushFinding(saasDashboard.billingSignals, path, 'Billing, checkout, subscription, invoice, payment, or webhook signal detected.');
+    if (hasExecutableBillingEvidence(path, source, role, packageDeps)) {
+      pushFinding(saasDashboard.billingSignals, path, 'Executable billing, checkout, payment provider, or webhook signal detected.');
     }
-    if (WEBHOOK_SIGNATURE_RE.test(source)) {
+    if (executable && WEBHOOK_SIGNATURE_RE.test(source)) {
       pushFinding(saasDashboard.webhookSignatureSignals, path, 'Webhook signature verification signal detected.');
     }
-    if (/chart|table|filter|date range|datatable|export|metrics|analytics|reports/i.test(source)) {
+    if (executable && /chart|table|filter|date range|datatable|export|metrics|analytics|reports/i.test(source)) {
       pushFinding(saasDashboard.dashboardSignals, path, 'Dashboard chart/table/filter/export/reporting signal detected.');
     }
-    if (DASHBOARD_STATE_RE.test(source)) {
+    if (executable && DASHBOARD_STATE_RE.test(source)) {
       pushFinding(saasDashboard.dashboardStateSignals, path, 'Loading/error/empty/skeleton/fallback dashboard state signal detected.');
     }
-    if (DESTRUCTIVE_ACTION_RE.test(source)) {
+    if (executable && DESTRUCTIVE_ACTION_RE.test(codeOnlySource)) {
       pushFinding(saasDashboard.destructiveActions, path, 'Destructive action copy or code signal detected.');
     }
-    if (DESTRUCTIVE_CONFIRM_RE.test(source)) {
+    if (executable && DESTRUCTIVE_CONFIRM_RE.test(source)) {
       pushFinding(saasDashboard.destructiveConfirmationSignals, path, 'Confirmation, dialog, modal, alert, or undo signal detected.');
     }
-    if (/process\.env|import\.meta\.env|config\.json|\.env|apiKey|provider|model/i.test(source)) {
+    if (executable && /process\.env|import\.meta\.env|config\.json|\.env|apiKey|provider|model/i.test(source)) {
       pushFinding(devtool.configUsage, path, 'Config, env, API key, provider, or model setting usage detected.');
       if (CONFIG_VALIDATION_RE.test(source)) {
         pushFinding(devtool.configValidationSignals, path, 'Config validation or recovery-message signal detected.');
@@ -1115,6 +1204,9 @@ export async function runShipReadinessScan(root: string, reports: FileReport[]):
       pushFinding(captureSignals, path, `${flowType} flow: email input/state and capture-oriented copy or form behavior detected.`);
       if (SUBMISSION_PATH_RE.test(source)) {
         pushFinding(captureWiringSignals, path, 'Submission path signal detected for capture flow.');
+        if (/process\.env|import\.meta\.env|NEXT_PUBLIC_|PUBLIC_/.test(source)) {
+          pushFinding(captureEnvEndpointSignals, path, 'Capture submission path depends on an environment variable.');
+        }
       } else if (PARTIAL_SUBMISSION_RE.test(source)) {
         pushFinding(capturePartialSignals, path, 'Submit/local state handling detected, but no clear persistence or external submission path was found.');
       }
@@ -1136,11 +1228,11 @@ export async function runShipReadinessScan(root: string, reports: FileReport[]):
     for (const button of buttonMatches) {
       if (CTA_TEXT_RE.test(source)) {
         pushFinding(ctaSignals, path, `CTA-oriented copy detected near button(s): ${button.slice(0, 120)}`);
-        if (NAVIGATION_RE.test(button) || /onClick\s*=|type\s*=\s*["']submit["']|formAction\s*=|disabled\b/i.test(button)) {
+        if (NAVIGATION_RE.test(button) || buttonHasExplicitBehavior(button, source)) {
           pushFinding(ctaWiringSignals, path, `CTA button has an explicit behavior signal: ${button.slice(0, 120)}`);
         }
       }
-      if (!/onClick\s*=|type\s*=\s*["']submit["']|formAction\s*=|aria-label\s*=|disabled\b/i.test(button)) {
+      if (!buttonHasExplicitBehavior(button, source)) {
         pushFinding(suspiciousButtons, path, `Button may lack explicit behavior: ${button.slice(0, 120)}`);
       }
     }
@@ -1151,11 +1243,11 @@ export async function runShipReadinessScan(root: string, reports: FileReport[]):
     if (includesAny(source, [/fetch\s*\(/, /axios\./, /XMLHttpRequest/, /navigator\.sendBeacon/, /['"]use server['"]/])) {
       pushFinding(networkCalls, path, 'Network call or server action signal detected.');
     }
-    if (includesAny(source, [/export\s+const\s+metadata\s*=/, /<Head\b/, /openGraph/i, /twitter/i, /metadataBase/i])) {
+    if (hasAnyMetadata(source)) {
       metadata.hasMetadata = true;
       metadata.files.push(path);
-      if (/openGraph/i.test(source)) metadata.hasOpenGraph = true;
-      if (/twitter/i.test(source)) metadata.hasTwitter = true;
+      if (/openGraph/i.test(source) || hasAstroOrHtmlOpenGraph(source)) metadata.hasOpenGraph = true;
+      if (/twitter/i.test(source) || hasAstroOrHtmlTwitterMetadata(source)) metadata.hasTwitter = true;
     }
     if (includesAny(source, [/gtag\(/, /GoogleAnalytics/, /plausible/, /posthog/i, /mixpanel/i, /analytics/i, /@vercel\/analytics/])) {
       pushFinding(analytics, path, 'Analytics signal detected.');
@@ -1203,7 +1295,8 @@ export async function runShipReadinessScan(root: string, reports: FileReport[]):
     }
     for (const commandPackage of collectInstallCommands(source)) {
       pushFinding(devtool.installCommands, path, `Install/run command references ${commandPackage}.`);
-      if (!packageNameMatchesDocumentedCommand(packageScan.name, commandPackage)) {
+      const shouldCompareToLocalPackage = isCliPackage(packageScan);
+      if (shouldCompareToLocalPackage && !packageNameMatchesDocumentedCommand(packageScan.name, commandPackage)) {
         pushFinding(devtool.installCommandMismatches, path, `Documented package ${commandPackage} does not match package.json name ${packageScan.name ?? 'unknown'}.`);
       }
     }
@@ -1254,6 +1347,7 @@ export async function runShipReadinessScan(root: string, reports: FileReport[]):
       captureSignals,
       captureWiringSignals,
       capturePartialSignals,
+      captureEnvEndpointSignals,
       ctaSignals,
       ctaWiringSignals,
       suspiciousButtons,

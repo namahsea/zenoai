@@ -9,6 +9,7 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsx src/index.ts",
+    "harness:ship-readiness": "tsx scripts/ship-readiness-harness.ts",
     "start": "node dist/index.js",
     "run:env": "export $(grep -v '^#' .env | xargs) && node bin/zenoai.js"
   },

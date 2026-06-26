@@ -1,0 +1,32 @@
+---
+import BaseLayout from '../layouts/BaseLayout.astro';
+import SiteHeader from '../components/SiteHeader.astro';
+
+const betaSignupUrl = import.meta.env.PUBLIC_BETA_SIGNUP_URL;
+---
+<BaseLayout>
+  <SiteHeader />
+  <main>
+    <h1>Zeno is a ship-readiness copilot for vibe-coded apps.</h1>
+    <p>Zeno can review billing, checkout, subscriptions, and webhooks in your real app.</p>
+
+    <form id="beta-form">
+      <label>
+        Email
+        <input type="email" name="email" placeholder="you@example.com" />
+      </label>
+      <button type="submit">Join beta</button>
+    </form>
+  </main>
+
+  <script define:vars={{ betaSignupUrl }}>
+    document.getElementById('beta-form')?.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      if (!betaSignupUrl) {
+        alert('Beta signup is not connected yet.');
+        return;
+      }
+      await fetch(betaSignupUrl, { method: 'POST' });
+    });
+  </script>
+</BaseLayout>
