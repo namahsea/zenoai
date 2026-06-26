@@ -87,8 +87,8 @@ const fixtureRoot = join(process.cwd(), 'fixtures', 'ship-readiness');
 
 const expectations: HarnessExpectation[] = [
   {
-    name: 'landing-astro-good',
-    root: join(fixtureRoot, 'landing-astro-good'),
+    name: 'landing-astro-env-capture',
+    root: join(fixtureRoot, 'landing-astro-env-capture'),
     projectType: 'landing_page',
     includes: ['Primary capture endpoint needs production proof'],
     excludes: [
@@ -136,6 +136,30 @@ const expectations: HarnessExpectation[] = [
       {
         label: 'unwired capture creates verdict cap',
         check: ({ scan }) => getPrimaryFlowVerdictCap(scan)?.finding.issue === 'Waitlist/email capture appears unwired',
+      },
+    ],
+  },
+  {
+    name: 'landing-verified-good',
+    root: join(fixtureRoot, 'landing-verified-good'),
+    projectType: 'landing_page',
+    excludes: [
+      'Primary capture endpoint needs production proof',
+      'Waitlist/email capture appears unwired',
+      'Primary CTA behavior needs verification',
+      'Missing OG/social metadata',
+      'No analytics detected',
+      'robots.txt or sitemap missing',
+      'No test safety net detected',
+    ],
+    custom: [
+      {
+        label: 'verified capture does not create verdict cap',
+        check: ({ scan }) => getPrimaryFlowVerdictCap(scan) === null,
+      },
+      {
+        label: 'owned capture route is detected',
+        check: ({ scan }) => scan.apiRoutes.some(path => path.includes('api/beta-updates/route')),
       },
     ],
   },

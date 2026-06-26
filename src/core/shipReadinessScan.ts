@@ -194,7 +194,7 @@ const AUTH_GUARD_RE = /\b(?:middleware|getServerSession|auth\s*\(|currentUser|re
 const DATA_WRITE_RE = /\b(?:prisma\.\w+\.(?:create|update|delete|upsert)|db\.(?:insert|update|delete)|drizzle\.(?:insert|update|delete)|\.from\s*\([^)]*\)\.(?:insert|update|delete|upsert)|fetch\s*\([^)]*method\s*:\s*['"`](?:POST|PUT|PATCH|DELETE)['"`]|export\s+async\s+function\s+(?:POST|PUT|PATCH|DELETE)\b|['"]use server['"])/is;
 const SERVER_DATA_WRITE_RE = /\b(?:prisma\.\w+\.(?:create|update|delete|upsert)|db\.(?:insert|update|delete)|drizzle\.(?:insert|update|delete)|\.from\s*\([^)]*\)\.(?:insert|update|delete|upsert)|export\s+async\s+function\s+(?:POST|PUT|PATCH|DELETE)\b|['"]use server['"])/is;
 const VALIDATION_RE = /\b(?:zod|yup|valibot|superstruct|schema\.(?:parse|safeParse)|safeParse\s*\(|parse\s*\(|required|if\s*\([^)]*(?:email|name|id|userId|workspaceId|amount|price|plan|role)[^)]*\))/i;
-const USER_ERROR_RE = /\b(?:try\s*\{|\.catch\s*\(|catch\s*\(|return\s+(?:NextResponse\.)?json\s*\([^)]*error|throw new Error|toast\.(?:error|warning)|setError|errorBoundary|ErrorBoundary)\b/i;
+const USER_ERROR_RE = /\b(?:try\s*\{|\.catch\s*\(|catch\s*\(|return\s+(?:NextResponse\.)?json\s*\([^)]*error|Response\.json\s*\([^)]*error|throw new Error|toast\.(?:error|warning)|setError|errorBoundary|ErrorBoundary)\b/i;
 const ENV_VALIDATION_RE = /\b(?:env\.safeParse|envSchema|createEnv|zod.*process\.env|requiredEnv|validateEnv|assertEnv|throw new Error\([^)]*(?:env|environment|DATABASE_URL|STRIPE|CLERK|AUTH|SUPABASE)|if\s*\(\s*!process\.env\.)/is;
 const BILLING_RE = /\b(?:stripe|paddle|lemonsqueezy|checkout|billing|subscription|invoice|payment|webhook)\b/i;
 const BILLING_EXECUTABLE_RE = /\b(?:stripe|paddle|lemonsqueezy|paypal|checkout\.sessions|paymentIntents|constructEvent|stripe-signature|webhookSecret|STRIPE_SECRET_KEY|STRIPE_WEBHOOK_SECRET|PADDLE_|LEMONSQUEEZY_|createCheckout|checkoutSession|subscriptionId)\b/i;
@@ -394,6 +394,11 @@ function hasDataWriteEvidence(path: string, source: string, role: FileRole): boo
   if (SERVER_DATA_WRITE_RE.test(source)) return true;
   if (!DATA_WRITE_RE.test(source)) return false;
   return apiRouteFile(path) || /(?:^|\/)(server|api|actions?|routes?)\//i.test(path);
+}
+
+function hasCaptureFlowSignal(source: string): boolean {
+  if (EMAIL_CAPTURE_RE.test(source) && (CAPTURE_COPY_RE.test(source) || /<form\b/i.test(source))) return true;
+  return /<form\b[\s\S]*?(?:type\s*=\s*["']email["']|name\s*=\s*["']email["'])[\s\S]*?(?:join|waitlist|early access|pre[\s-]?order|request access|book demo|contact)/i.test(source);
 }
 
 function hasActionFlowType(flows: ActionFlowFinding[], type: ActionFlowType): boolean {
@@ -737,6 +742,9 @@ function detectProjectType(
 
   if (scan.routeFiles.length <= 2 && scan.apiRoutes.length === 0 && (scan.package.framework === 'next' || scan.package.framework === 'react' || scan.package.framework === 'vite' || scan.package.framework === 'astro')) {
     addScore(scores, signalsByType, 'landing_page', 18, 'single public route shape');
+  }
+  if (scan.forms.length > 0 && scan.apiRoutes.length <= 1 && !/dashboard|admin|login|signup|sign-in|sign-up|auth|settings|account|billing|checkout|cart|order/.test(allPaths)) {
+    addScore(scores, signalsByType, 'landing_page', 24, 'landing capture form with minimal API surface detected');
   }
   if (scan.actionFlows.some(flow => ['email_capture', 'preorder', 'book_demo', 'contact_sales', 'cta_navigation'].includes(flow.type))) {
     addScore(scores, signalsByType, 'landing_page', 22, 'primary CTA or capture flow detected');
@@ -1253,7 +1261,7 @@ export async function runShipReadinessScan(root: string, reports: FileReport[]):
         pushFinding(devtool.configValidationSignals, path, 'Config validation or recovery-message signal detected.');
       }
     }
-    if (EMAIL_CAPTURE_RE.test(source) && (CAPTURE_COPY_RE.test(source) || /<form\b/i.test(source))) {
+    if (hasCaptureFlowSignal(source)) {
       const flowType = detectFlowType(source);
       pushFinding(captureSignals, path, `${flowType} flow: email input/state and capture-oriented copy or form behavior detected.`);
       if (SUBMISSION_PATH_RE.test(source)) {
