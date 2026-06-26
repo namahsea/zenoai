@@ -94,6 +94,7 @@ const expectations: HarnessExpectation[] = [
     excludes: [
       'Primary CTA behavior needs verification',
       'Billing/webhook flow needs verification',
+      'Destructive action needs confirmation',
       'Install command may be wrong',
       'Missing OG/social metadata',
       'Data write needs validation/error handling',

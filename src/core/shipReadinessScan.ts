@@ -579,6 +579,10 @@ function buildActionFlows(args: {
 
 function buildSaasDashboardActionFlows(scan: SaasDashboardScan): ActionFlowFinding[] {
   const flows: ActionFlowFinding[] = [];
+  const hasMutatingOrProtectedAppSurface = scan.authRouteSignals.length > 0 ||
+    scan.protectedRouteSignals.length > 0 ||
+    scan.dataWrites.length > 0 ||
+    scan.billingSignals.length > 0;
 
   if (scan.authRouteSignals.length > 0 && scan.authGuardSignals.length === 0 && scan.authPackageSignals.length === 0) {
     flows.push({
@@ -636,7 +640,7 @@ function buildSaasDashboardActionFlows(scan: SaasDashboardScan): ActionFlowFindi
     });
   }
 
-  if (scan.destructiveActions.length > 0 && scan.destructiveConfirmationSignals.length === 0) {
+  if (hasMutatingOrProtectedAppSurface && scan.destructiveActions.length > 0 && scan.destructiveConfirmationSignals.length === 0) {
     flows.push({
       type: 'destructive_action',
       label: 'Destructive action',

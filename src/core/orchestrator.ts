@@ -1614,7 +1614,7 @@ function shortIssueLabel(issue: string): string {
   if (/analytics/.test(lower)) return 'No analytics';
   if (/heavy|animation|media|performance|mobile/.test(lower)) return 'Mobile perf risk';
   if (/large file|monolith|lines/.test(lower)) return 'Large page file';
-  if (/browser global|browser api|node runtime/.test(lower)) return 'Node/browser API risk';
+  if (/browser global|browser api|node runtime|hydration|ssr/.test(lower)) return 'Browser API guard risk';
   if (/test/.test(lower)) return 'No tests';
   if (/robots|sitemap/.test(lower)) return 'SEO files missing';
   if (/bin target/.test(lower)) return 'Bin target missing';
