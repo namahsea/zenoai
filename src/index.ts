@@ -1,15 +1,20 @@
-import { select, confirm } from '@inquirer/prompts';
+import { confirm } from '@inquirer/prompts';
 import chalk from 'chalk';
 import { existsSync, readFileSync } from 'node:fs';
-import { writeFile, mkdir } from 'node:fs/promises';
+import { writeFile, mkdir, readdir, readFile, stat } from 'node:fs/promises';
 import os from 'node:os';
 import { resolve, basename, join, sep } from 'node:path';
 import { exec } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 import ora from 'ora';
-import { ensureConfig } from './config.js';
+import { ensureConfig, resetConfig } from './config.js';
 import { runOrchestrator, runPhase2, runSplit } from './core/orchestrator.js';
-import { loadReport } from './core/cache.js';
+import { clearCachedReport, loadReport } from './core/cache.js';
 import { generateHtml } from './core/htmlExporter.js';
+import { resetHistory } from './core/history.js';
+import { manualOpenCommand, openFileInBrowser } from './core/localReportViewer.js';
+import { theme } from './core/theme.js';
+import { numberedActionPrompt } from './core/actionPrompt.js';
 
 const { version } = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string };
 
@@ -31,6 +36,32 @@ const ZENO_ACTIONS = [
     description: 'Finds obvious security risks before launch.',
   },
 ] as const;
+
+function printHelp(): void {
+  console.log(theme.title(`Zeno v${version}`));
+  console.log(theme.muted('AI-assisted codebase review and safe refactor judgment.\n'));
+
+  console.log(theme.heading('Usage'));
+  console.log('  npx zenoai                 Run Zeno in the current project');
+  console.log('  npx zenoai help            Show this help');
+  console.log('  npx zenoai reset           Remove saved API provider/key');
+  console.log("  npx zenoai reset-history   Remove this project's Zeno refactor history");
+  console.log('  npx zenoai clear-report    Remove cached last report');
+  console.log('  npx zenoai report list     List saved local ship-readiness reports');
+  console.log('  npx zenoai report open latest  Open latest local report in your browser');
+  console.log('  npx zenoai --export        Export cached report as HTML');
+  console.log('  npx zenoai --output <file> Export cached report to a specific HTML file\n');
+
+  console.log(theme.heading('Files Zeno Uses'));
+  console.log(theme.muted('  ~/.zenoai/config.json       Saved provider and API key'));
+  console.log(theme.muted('  ~/.zenoai/last-report.json  Last report cache'));
+  console.log(theme.muted('  .zeno-history.json          Project refactor history\n'));
+
+  console.log(theme.heading('Common Fixes'));
+  console.log('  API key rejected?     Run `npx zenoai reset`');
+  console.log('  Refactor skipped?     Run `npx zenoai reset-history` from the project root');
+  console.log('  Export looks stale?   Run `npx zenoai clear-report`');
+}
 
 type GuardResult =
   | { status: 'ok'; selfRun: boolean }
@@ -68,17 +99,148 @@ function checkProjectDirectory(): GuardResult {
   return { status: 'ok', selfRun };
 }
 
+interface LocalReportEntry {
+  path: string;
+  format: 'html' | 'json' | 'csv';
+  savedAt: Date;
+  projectType?: string;
+}
+
+async function listLocalReports(root: string): Promise<LocalReportEntry[]> {
+  const reportsDir = join(root, '.zeno', 'reports');
+  let names: string[];
+  try {
+    names = await readdir(reportsDir);
+  } catch {
+    return [];
+  }
+
+  const entries: LocalReportEntry[] = [];
+  for (const name of names) {
+    if (!/^ship-readiness-\d{4}-\d{2}-\d{2}-\d{2}-\d{2}\.(html|json|csv)$/.test(name)) continue;
+    const fullPath = join(reportsDir, name);
+    const fileStat = await stat(fullPath);
+    const format = name.endsWith('.html') ? 'html' : name.endsWith('.csv') ? 'csv' : 'json';
+    let projectType: string | undefined;
+    if (format === 'json') {
+      try {
+        const parsed = JSON.parse(await readFile(fullPath, 'utf8')) as { report?: { projectType?: string } };
+        projectType = parsed.report?.projectType;
+      } catch {
+        projectType = undefined;
+      }
+    }
+    entries.push({ path: fullPath, format, savedAt: fileStat.mtime, projectType });
+  }
+
+  return entries.sort((a, b) => b.savedAt.getTime() - a.savedAt.getTime());
+}
+
+async function handleReportCommand(args: string[]): Promise<void> {
+  const subcommand = args[1];
+  const target = args[2];
+  const root = process.cwd();
+  const reports = await listLocalReports(root);
+
+  if (subcommand === 'list') {
+    if (reports.length === 0) {
+      console.log(theme.caution('No local ship-readiness reports found. Run `npx zenoai` first.'));
+      return;
+    }
+
+    console.log(theme.heading('Saved reports'));
+    for (const report of reports) {
+      const date = report.savedAt.toLocaleString('en-GB', {
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      });
+      const relPath = report.path.startsWith(root) ? report.path.slice(root.length + 1) : report.path;
+      const type = report.projectType ? ` ${report.projectType}` : '';
+      console.log(theme.muted(`${date}  ${report.format.toUpperCase()}${type}  ${relPath}`));
+    }
+    return;
+  }
+
+  if (subcommand === 'open' && target === 'latest') {
+    const latestHtml = reports.find(report => report.format === 'html');
+    const latestJson = reports.find(report => report.format === 'json');
+    const report = latestHtml ?? latestJson;
+    if (!report) {
+      console.log(theme.caution('No local ship-readiness reports found. Run `npx zenoai` first.'));
+      return;
+    }
+
+    try {
+      await openFileInBrowser(report.path);
+      console.log(theme.success(`Opened latest report: ${pathToFileURL(report.path).href}`));
+    } catch {
+      console.log(theme.caution('Could not open the report automatically.'));
+      console.log(theme.muted(`Open manually: ${manualOpenCommand(report.path)}`));
+      console.log(theme.info(pathToFileURL(report.path).href));
+    }
+    return;
+  }
+
+  console.log(theme.caution('Unknown report command.'));
+  console.log(theme.muted('Use `npx zenoai report list` or `npx zenoai report open latest`.'));
+}
+
 async function main() {
   const args = process.argv.slice(2);
+  const command = args[0];
   const exportHtml = args.includes('--export');
   const outputIdx = args.indexOf('--output');
   const outputPath = outputIdx !== -1 ? args[outputIdx + 1] : undefined;
+
+  if (command === 'help' || command === '--help' || command === '-h') {
+    printHelp();
+    process.exit(0);
+  }
+
+  if (command === 'report') {
+    await handleReportCommand(args);
+    process.exit(0);
+  }
+
+  if (command === 'reset') {
+    const removed = await resetConfig();
+    if (removed) {
+      console.log(theme.success('Saved API key removed. Run `npx zenoai` to enter a new one.'));
+    } else {
+      console.log(theme.caution('No saved API key found. Run `npx zenoai` to set one up.'));
+    }
+    process.exit(0);
+  }
+
+  if (command === 'reset-history') {
+    const removed = await resetHistory(process.cwd());
+    if (removed) {
+      console.log(theme.success('Project refactor history removed from .zeno-history.json.'));
+    } else {
+      console.log(theme.caution('No project refactor history found in this directory.'));
+    }
+    process.exit(0);
+  }
+
+  if (command === 'clear-report') {
+    const removed = await clearCachedReport();
+    if (removed) {
+      console.log(theme.success('Cached last report removed from ~/.zenoai/last-report.json.'));
+    } else {
+      console.log(theme.caution('No cached last report found.'));
+    }
+    process.exit(0);
+  }
 
   // Export mode — load cached report, write HTML, exit. No prompts, no API call.
   if (exportHtml || outputPath) {
     const cached = await loadReport();
     if (!cached) {
-      console.error(chalk.red('No report found. Run `zenoai` first to generate a report.'));
+      console.error(theme.danger('No report found. Run `zenoai` first to generate a report.'));
       process.exit(1);
     }
     let dest: string;
@@ -97,7 +259,7 @@ async function main() {
     }
     const html = generateHtml(cached.report, cached.root, cached.fileCount);
     await writeFile(dest, html, 'utf8');
-    console.log(chalk.green(`Report exported → ${dest}`));
+    console.log(theme.success(`Report exported → ${dest}`));
     const opener = process.platform === 'darwin' ? 'open'
                  : process.platform === 'win32'  ? 'start ""'
                  : 'xdg-open';
@@ -135,12 +297,12 @@ async function main() {
  ░██       ░██        ░██    ░██ ░██    ░██
 ░█████████  ░███████  ░██    ░██  ░███████  `;
 
-  console.log('\n\n' + chalk.hex('#F8F8F2')(banner));
+  console.log('\n\n' + theme.title(banner));
   console.log('');
   console.log('');
-  // console.log(chalk.hex('#F8F8F2')('Drop a senior engineer into any codebase.'));
-  console.log(chalk.hex('#F8F8F2')(`💎 Zeno v${version}`));
-  console.log(chalk.hex('#6272A4')(quote));
+  // console.log(theme.text('Drop a senior engineer into any codebase.'));
+  console.log(theme.title(`💎 Zeno v${version}`));
+  console.log(theme.muted(quote));
   console.log('');
 
   const guardSpinner = ora({ text: 'Checking project directory...', color: 'cyan' }).start();
@@ -152,16 +314,16 @@ async function main() {
 
   if (guardResult.status === 'dangerous-path') {
     guardSpinner.fail('Not a project directory.');
-    console.log(chalk.red('\n⚠  Zeno must be run from inside a project directory.'));
-    console.log(chalk.red('   Current directory: ' + guardResult.cwd));
-    console.log(chalk.red('   Navigate to your project root and try again.\n'));
+    console.log(theme.danger('\n⚠  Zeno must be run from inside a project directory.'));
+    console.log(theme.danger('   Current directory: ' + guardResult.cwd));
+    console.log(theme.danger('   Navigate to your project root and try again.\n'));
     process.exit(1);
   }
 
   if (guardResult.status === 'no-package-json') {
     guardSpinner.fail('No package.json found.');
-    console.log(chalk.yellow('\n⚠  No package.json found in this directory.'));
-    console.log(chalk.yellow('   Zeno works best when run from your project root.'));
+    console.log(theme.caution('\n⚠  No package.json found in this directory.'));
+    console.log(theme.caution('   Zeno works best when run from your project root.'));
     const proceed = await confirm({ message: 'Continue anyway?', default: false });
     if (!proceed) process.exit(1);
     console.log('');
@@ -170,18 +332,15 @@ async function main() {
   guardSpinner.stop();
 
   if (guardResult.status === 'ok' && guardResult.selfRun) {
-    console.log(chalk.yellow('⚠  You are running Zeno on its own codebase. Results may be less useful.\n'));
+    console.log(theme.caution('⚠  You are running Zeno on its own codebase. Results may be less useful.\n'));
   }
 
   const config = await ensureConfig();
 
   const projectName = basename(process.cwd());
-  const action = await select({
-    message: `What do you want Zeno to do for ${projectName}?\n`,
-    choices: ZENO_ACTIONS.map((a) => ({
-      value: a.value,
-      description: a.description,
-    })),
+  const action = await numberedActionPrompt({
+    message: `What do you want Zeno to do for ${projectName}?`,
+    choices: ZENO_ACTIONS,
   });
 
   console.log('');

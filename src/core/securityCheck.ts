@@ -4,6 +4,7 @@ import { basename } from 'node:path';
 import type { FileReport } from './analyst.js';
 import { isHighConsequencePath } from './riskSignals.js';
 import { runProgress } from './progress.js';
+import { riskTone, theme } from './theme.js';
 
 type SecuritySeverity = 'Critical' | 'High' | 'Medium' | 'Low';
 
@@ -16,12 +17,7 @@ interface SecurityIssue {
 }
 
 function severityColor(severity: SecuritySeverity): (text: string) => string {
-  switch (severity) {
-    case 'Critical': return chalk.red;
-    case 'High': return chalk.hex('#EF9F27');
-    case 'Medium': return chalk.yellow;
-    case 'Low': return chalk.green;
-  }
+  return riskTone(severity);
 }
 
 function overallSeverity(issues: SecurityIssue[]): SecuritySeverity {
@@ -282,48 +278,48 @@ export async function runSecurityCheck(reports: FileReport[]): Promise<void> {
   const date = now.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
   const time = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', hour12: false });
 
-  console.log(chalk.bold.white('━━━  ZENOAI — SECURITY CHECK  ━━━'));
-  console.log(chalk.dim(`Project     : ${basename(process.cwd())}`));
-  console.log(chalk.dim('Reviewed by : Security Reviewer'));
-  console.log(chalk.dim('Scan type   : Local static scan'));
-  console.log(chalk.dim(`Files       : ${inspectedReports.length}`));
-  console.log(chalk.dim(`Date        : ${date}, ${time}\n`));
+  console.log(theme.title('━━━  ZENOAI — SECURITY CHECK  ━━━'));
+  console.log(theme.muted(`Project     : ${basename(process.cwd())}`));
+  console.log(theme.muted('Reviewed by : Security Reviewer'));
+  console.log(theme.muted('Scan type   : Local static scan'));
+  console.log(theme.muted(`Files       : ${inspectedReports.length}`));
+  console.log(theme.muted(`Date        : ${date}, ${time}\n`));
 
-  console.log(chalk.bold('What Zeno checked'));
-  console.log(chalk.dim('  - exposed secrets and client/server boundary leaks'));
-  console.log(chalk.dim('  - auth, webhook, payment, cart, order, and billing routes'));
-  console.log(chalk.dim('  - unsafe redirects and permissive CORS'));
-  console.log(chalk.dim('  - raw HTML rendering and dynamic code execution'));
-  console.log(chalk.dim('  - weak crypto, disabled TLS, command execution, and risky file/database access\n'));
+  console.log(theme.heading('What Zeno checked'));
+  console.log(theme.muted('  - exposed secrets and client/server boundary leaks'));
+  console.log(theme.muted('  - auth, webhook, payment, cart, order, and billing routes'));
+  console.log(theme.muted('  - unsafe redirects and permissive CORS'));
+  console.log(theme.muted('  - raw HTML rendering and dynamic code execution'));
+  console.log(theme.muted('  - weak crypto, disabled TLS, command execution, and risky file/database access\n'));
 
-  console.log(chalk.bold('Note'));
-  console.log(chalk.dim('  This checks obvious risk signals. It is not a full security audit.\n'));
+  console.log(theme.heading('Note'));
+  console.log(theme.muted('  This checks obvious risk signals. It is not a full security audit.\n'));
 
-  console.log(chalk.dim('Are there obvious security risks?'));
+  console.log(theme.muted('Are there obvious security risks?'));
   if (issues.length === 0) {
-    console.log(`${chalk.bold.green('No obvious high-risk issues found')}  ${chalk.green('[Low risk]')}\n`);
-    console.log(chalk.bold('Next step'));
-    console.log(chalk.dim('  Run this again before launch after major route, auth, payment, or webhook changes.\n'));
-    console.log(chalk.bold.white('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
+    console.log(`${chalk.bold(theme.success('No obvious high-risk issues found'))}  ${theme.success('[Low risk]')}\n`);
+    console.log(theme.heading('Next step'));
+    console.log(theme.muted('  Run this again before launch after major route, auth, payment, or webhook changes.\n'));
+    console.log(theme.divider('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
     return;
   }
 
   console.log(`${chalk.bold(severityFn('Yes'))}  ${severityFn(`[${severity} risk]`)}\n`);
 
-  console.log(chalk.bold('Main concern'));
+  console.log(theme.heading('Main concern'));
   const mainIssue = issues[0];
-  console.log(`  ${mainIssue.concern}`);
-  console.log(`  ${chalk.dim(mainIssue.detail)}\n`);
+  console.log(`  ${theme.text(mainIssue.concern)}`);
+  console.log(`  ${theme.muted(mainIssue.detail)}\n`);
 
-  console.log(chalk.bold('Where to look'));
+  console.log(theme.heading('Where to look'));
   for (const issue of issues.slice(0, 5)) {
     const color = severityColor(issue.severity);
-    console.log(`  ${chalk.cyan(issue.filePath)} ${color(issue.severity)}`);
-    console.log(`     ${chalk.dim(issue.concern)}`);
+    console.log(`  ${theme.file(issue.filePath)} ${color(issue.severity)}`);
+    console.log(`     ${theme.muted(issue.concern)}`);
   }
   console.log('');
 
-  console.log(chalk.bold('Safest next step'));
-  console.log(`  Start with ${mainIssue.filePath}. ${mainIssue.nextStep}\n`);
-  console.log(chalk.bold.white('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
+  console.log(theme.heading('Safest next step'));
+  console.log(`  ${theme.text(`Start with ${mainIssue.filePath}. ${mainIssue.nextStep}`)}\n`);
+  console.log(theme.divider('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'));
 }
