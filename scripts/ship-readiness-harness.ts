@@ -90,7 +90,7 @@ const expectations: HarnessExpectation[] = [
     name: 'landing-astro-good',
     root: join(fixtureRoot, 'landing-astro-good'),
     projectType: 'landing_page',
-    includes: ['Capture endpoint needs production verification'],
+    includes: ['Primary capture endpoint needs production proof'],
     excludes: [
       'Primary CTA behavior needs verification',
       'Billing/webhook flow needs verification',
@@ -123,7 +123,7 @@ const expectations: HarnessExpectation[] = [
     root: join(fixtureRoot, 'landing-unwired-bad'),
     projectType: 'landing_page',
     includes: ['Waitlist/email capture appears unwired'],
-    excludes: ['Capture endpoint needs production verification'],
+    excludes: ['Primary capture endpoint needs production proof'],
   },
   {
     name: 'landing-next-good',

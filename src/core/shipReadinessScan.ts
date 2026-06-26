@@ -165,6 +165,9 @@ const TEST_RE = /(?:^|[./_-])(?:test|tests|spec|__tests__)(?:[./_-]|$)|\.(?:test
 const CAPTURE_COPY_RE = /\b(waitlist|join(?:ed)?|pre[\s-]?order|early access|request access|book demo|contact sales|contact us|sign up|signup|get started)\b/i;
 const EMAIL_CAPTURE_RE = /type\s*=\s*["']email["']|name\s*=\s*["']email["']|placeholder\s*=\s*["'][^"']*(email|waitlist|join|pre[\s-]?order|access|demo|contact)[^"']*["']|\b(email|setEmail)\b/i;
 const SUBMISSION_PATH_RE = /fetch\s*\(|axios\.|ky\s*\(|got\s*\(|navigator\.sendBeacon|action\s*=|formAction\s*=|['"]use server['"]|\/api\b|export\s+async\s+function\s+POST\b|supabase|firebase|prisma|drizzle|database|db\.\w+\.(create|insert|upsert)|resend|mailchimp|convertkit|loops|hubspot|airtable|google\s*sheets|notion|webhook|zapier|make\.com/i;
+const OWNED_CAPTURE_SUBMISSION_RE = /(?:fetch|axios|ky|got)\s*\(\s*["'][^"']*\/api\b|action\s*=\s*["'][^"']*\/api\b|formAction\s*=|['"]use server['"]|export\s+async\s+function\s+POST\b|supabase\.from\s*\(|firebase\.|prisma\.|drizzle\.|db\.\w+\.(create|insert|upsert)|resend\.|mailchimp\.|convertkit\.|loops\.|hubspot\.|airtable\./i;
+const KNOWN_CAPTURE_PROVIDER_RE = /(?:https?:\/\/|action\s*=\s*["'][^"']*|fetch\s*\(\s*["'][^"']*)(?:formspree|typeform|tally|hubspot|mailchimp|convertkit|loops|beehiiv|airtable|zapier|make\.com|netlify)/i;
+const ENV_ENDPOINT_RE = /process\.env|import\.meta\.env|NEXT_PUBLIC_|PUBLIC_/;
 const PARTIAL_SUBMISSION_RE = /onSubmit\s*=|handleSubmit|preventDefault\(\)|set[A-Z]\w*\([^)]*['"`]?\s*['"`]?\)|reset\(/i;
 const CTA_TEXT_RE = /\b(start|join|pre[\s-]?order|sign up|signup|book demo|contact|contact sales|get started|try now|install|docs|download|request access)\b/i;
 const NAVIGATION_RE = /href\s*=|router\.push|navigate\s*\(|window\.location|location\.href|Link\s+href|to\s*=/i;
@@ -439,6 +442,8 @@ function buildActionFlows(args: {
   captureWiringSignals: SourceFinding[];
   capturePartialSignals: SourceFinding[];
   captureEnvEndpointSignals: SourceFinding[];
+  captureOwnedSubmissionSignals: SourceFinding[];
+  captureProviderSignals: SourceFinding[];
   ctaSignals: SourceFinding[];
   ctaWiringSignals: SourceFinding[];
   suspiciousButtons: SourceFinding[];
@@ -451,8 +456,10 @@ function buildActionFlows(args: {
     const hasClearSubmissionPath = args.captureWiringSignals.length > 0;
     const hasPartialSubmissionLogic = args.capturePartialSignals.length > 0;
     const hasEnvBackedEndpoint = args.captureEnvEndpointSignals.length > 0;
+    const hasOwnedOrProviderProof = args.captureOwnedSubmissionSignals.length > 0 || args.captureProviderSignals.length > 0;
+    const hasEnvOnlyEndpoint = hasEnvBackedEndpoint && !hasOwnedOrProviderProof;
     const status: ActionFlowStatus = hasClearSubmissionPath
-      ? hasEnvBackedEndpoint
+      ? hasEnvOnlyEndpoint
         ? 'needs_verification'
         : 'wired'
       : 'likely_unwired';
@@ -470,10 +477,10 @@ function buildActionFlows(args: {
         status,
         severity: 'High',
         certainty: status === 'likely_unwired' ? 'likely' : 'needs_verification',
-        evidence: hasEnvBackedEndpoint
+        evidence: hasEnvOnlyEndpoint
           ? [
               `${primaryCapture.path}: ${primaryCapture.evidence}`,
-              `${args.captureEnvEndpointSignals[0].path}: Capture submission depends on an environment-configured endpoint.`,
+              `${args.captureEnvEndpointSignals[0].path}: Primary capture submission depends on an environment-configured external endpoint with no local/API/provider proof in the repo.`,
             ]
           : [
               `${primaryCapture.path}: ${primaryCapture.evidence}`,
@@ -481,11 +488,11 @@ function buildActionFlows(args: {
                 ? `${args.capturePartialSignals[0].path}: ${args.capturePartialSignals[0].evidence}`
                 : 'No fetch/API route/server action/form action/database/email integration was detected.',
             ],
-        risk: hasEnvBackedEndpoint
-          ? 'The capture flow can work, but production may silently miss leads if the endpoint environment variable is absent or misconfigured.'
+        risk: hasEnvOnlyEndpoint
+          ? 'The capture flow may work, but public launch can silently lose leads if the production endpoint env var is absent, stale, or points nowhere.'
           : 'Users may think they joined the waitlist, preordered, requested access, or contacted the team, but nothing is actually captured.',
-        fix: hasEnvBackedEndpoint
-          ? 'Confirm the production signup/contact endpoint env var is configured, or wire the form to an owned API route/server action before launch.'
+        fix: hasEnvOnlyEndpoint
+          ? 'Submit a real email on the production URL and verify it arrives, or wire the form to an owned API route/server action/provider before launch.'
           : 'Wire the flow to an API route, server action, database, email platform, CRM, webhook, or disable/rename the CTA before launch.',
       });
     }
@@ -941,12 +948,12 @@ function buildLaunchFindings(scan: Omit<ShipReadinessScan, 'projectType' | 'proj
     if (flow.status === 'wired' || flow.status === 'not_detected') continue;
     if (['cli_install', 'cli_entrypoint', 'filesystem_write_safety', 'config_loading', 'command_execution'].includes(flow.type)) continue;
 
-    const captureEndpointNeedsVerification = flow.type === 'email_capture' && /environment-configured endpoint|endpoint env var|production signup/i.test(flow.evidence.join(' ') + ' ' + flow.fix);
+    const captureEndpointNeedsVerification = flow.type === 'email_capture' && /environment-configured endpoint|endpoint env var|production signup|production endpoint|production url/i.test(flow.evidence.join(' ') + ' ' + flow.fix);
     const issue = flow.type === 'cta_navigation'
       ? 'Primary CTA behavior needs verification'
       : flow.type === 'email_capture'
         ? captureEndpointNeedsVerification
-          ? 'Capture endpoint needs production verification'
+          ? 'Primary capture endpoint needs production proof'
           : 'Waitlist/email capture appears unwired'
         : flow.type === 'auth_flow'
           ? 'Auth flow needs verification'
@@ -1097,6 +1104,8 @@ export async function runShipReadinessScan(root: string, reports: FileReport[]):
   const captureWiringSignals: SourceFinding[] = [];
   const capturePartialSignals: SourceFinding[] = [];
   const captureEnvEndpointSignals: SourceFinding[] = [];
+  const captureOwnedSubmissionSignals: SourceFinding[] = [];
+  const captureProviderSignals: SourceFinding[] = [];
   const ctaSignals: SourceFinding[] = [];
   const ctaWiringSignals: SourceFinding[] = [];
   const devtool: DevtoolScan = {
@@ -1218,8 +1227,14 @@ export async function runShipReadinessScan(root: string, reports: FileReport[]):
       pushFinding(captureSignals, path, `${flowType} flow: email input/state and capture-oriented copy or form behavior detected.`);
       if (SUBMISSION_PATH_RE.test(source)) {
         pushFinding(captureWiringSignals, path, 'Submission path signal detected for capture flow.');
-        if (/process\.env|import\.meta\.env|NEXT_PUBLIC_|PUBLIC_/.test(source)) {
+        if (ENV_ENDPOINT_RE.test(source)) {
           pushFinding(captureEnvEndpointSignals, path, 'Capture submission path depends on an environment variable.');
+        }
+        if (OWNED_CAPTURE_SUBMISSION_RE.test(source)) {
+          pushFinding(captureOwnedSubmissionSignals, path, 'Owned API/server action/database/provider submission proof detected for capture flow.');
+        }
+        if (KNOWN_CAPTURE_PROVIDER_RE.test(source)) {
+          pushFinding(captureProviderSignals, path, 'Known external form/email provider signal detected for capture flow.');
         }
       } else if (PARTIAL_SUBMISSION_RE.test(source)) {
         pushFinding(capturePartialSignals, path, 'Submit/local state handling detected, but no clear persistence or external submission path was found.');
@@ -1363,6 +1378,8 @@ export async function runShipReadinessScan(root: string, reports: FileReport[]):
       captureWiringSignals,
       capturePartialSignals,
       captureEnvEndpointSignals,
+      captureOwnedSubmissionSignals,
+      captureProviderSignals,
       ctaSignals,
       ctaWiringSignals,
       suspiciousButtons,
