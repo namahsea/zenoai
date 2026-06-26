@@ -1,6 +1,6 @@
 import { readdir, readFile } from 'node:fs/promises';
 import { extname, join, relative, sep } from 'node:path';
-import { runShipReadinessScan } from '../src/core/shipReadinessScan.js';
+import { getPrimaryFlowVerdictCap, runShipReadinessScan } from '../src/core/shipReadinessScan.js';
 import type { FileReport } from '../src/core/analyst.js';
 
 const SOURCE_EXTS = new Set(['.ts', '.tsx', '.js', '.jsx', '.astro']);
@@ -98,8 +98,13 @@ const expectations: HarnessExpectation[] = [
       'Install command may be wrong',
       'Missing OG/social metadata',
       'Data write needs validation/error handling',
+      'Dashboard states need verification',
     ],
     custom: [
+      {
+        label: 'primary capture endpoint creates verdict cap',
+        check: ({ scan }) => getPrimaryFlowVerdictCap(scan)?.finding.issue === 'Primary capture endpoint needs production proof',
+      },
       {
         label: 'detects Astro/Open Graph metadata',
         check: ({ scan }) => scan.metadata.hasOpenGraph && scan.metadata.hasTwitter,
@@ -123,7 +128,16 @@ const expectations: HarnessExpectation[] = [
     root: join(fixtureRoot, 'landing-unwired-bad'),
     projectType: 'landing_page',
     includes: ['Waitlist/email capture appears unwired'],
-    excludes: ['Primary capture endpoint needs production proof'],
+    excludes: [
+      'Primary capture endpoint needs production proof',
+      'Dashboard states need verification',
+    ],
+    custom: [
+      {
+        label: 'unwired capture creates verdict cap',
+        check: ({ scan }) => getPrimaryFlowVerdictCap(scan)?.finding.issue === 'Waitlist/email capture appears unwired',
+      },
+    ],
   },
   {
     name: 'landing-next-good',

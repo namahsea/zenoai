@@ -22,7 +22,7 @@ import { confirm, select } from '@inquirer/prompts';
 import { runDiffer } from './differ.js';
 import { runStaticSplit } from './splitter.js';
 import { runSecurityCheck } from './securityCheck.js';
-import { runShipReadinessScan } from './shipReadinessScan.js';
+import { getPrimaryFlowVerdictCap, runShipReadinessScan } from './shipReadinessScan.js';
 import type { LaunchFinding, ShipReadinessScan } from './shipReadinessScan.js';
 import { manualOpenCommand, openFileInBrowser } from './localReportViewer.js';
 import { ZENO_MODELS } from './models.js';
@@ -191,6 +191,7 @@ Rules:
 - Do not put large files, no tests, browser API usage, or mixed concerns in hardBlockers unless they directly break launch. These usually belong in codeOwnershipRisks.
 - Score/label mapping: 1-3 Critical, 4-5 Concerning, 6-7 Fair, 8-10 Good.
 - Prefer moving a finding to softBlockers or codeOwnershipRisks over inflating severity. Precision is more important than sounding dramatic.
+- If deterministic launchFindings contain a High or Critical hard blocker/candidate for a primary action flow, the overall verdict must not be "Ship with caution" or "Safe to ship". Use at most "Not yet" / High risk until the primary action flow is verified.
 - safestNextStep must be the safest next step for launch readiness, not broad cleanup. For landing pages with action-flow risks, the safest next step is to verify and wire the primary action flow first: capture flow and main CTAs before metadata, analytics, or refactoring.
 - Return valid JSON only. No markdown. No extra text before or after JSON.`;
 
@@ -374,6 +375,40 @@ function fallbackReportFromScan(scan: ShipReadinessScan): HealthReport {
       ? `Verify and wire the primary action flow first: ${primaryActionRisk.issue}. Do not refactor before the launch path works.`
       : 'Verify the main user path manually before refactoring or sending public traffic.',
   };
+}
+
+function applyPrimaryFlowVerdictCap(report: HealthReport, scan: ShipReadinessScan | null): HealthReport {
+  if (!scan) return report;
+  const cap = getPrimaryFlowVerdictCap(scan);
+  if (!cap || report.score <= cap.score) return report;
+
+  const cappedReport: HealthReport = {
+    ...report,
+    score: cap.score,
+    label: cap.label,
+    summary: report.summary,
+    publicLaunch: {
+      answer: 'No',
+      reason: `Public launch should wait until this primary action flow is verified: ${cap.finding.issue}.`,
+    },
+    paidTraffic: {
+      answer: 'No',
+      reason: `Paid traffic should wait until this primary action flow is verified: ${cap.finding.issue}.`,
+    },
+  };
+
+  if (!cappedReport.privatePreview || cappedReport.privatePreview.answer === 'Yes') {
+    cappedReport.privatePreview = {
+      answer: 'Maybe',
+      reason: `Private preview is reasonable only after manually checking: ${cap.finding.issue}.`,
+    };
+  }
+
+  if (cappedReport.founderSummary && !cappedReport.founderSummary.toLowerCase().includes('not yet')) {
+    cappedReport.founderSummary = `${cappedReport.founderSummary} Zeno is capping the verdict at Not yet because the primary action flow still needs proof.`;
+  }
+
+  return cappedReport;
 }
 
 function localTimestamp(date = new Date()): string {
@@ -1306,6 +1341,7 @@ ${JSON.stringify(shipScan, null, 2)}`
       if (projectTypeResolution) {
         report.projectType = projectTypeResolution.projectType;
       }
+      report = applyPrimaryFlowVerdictCap(report, shipScan);
       const localReportPath = await saveShipReadinessLocalReport({
         root,
         report,

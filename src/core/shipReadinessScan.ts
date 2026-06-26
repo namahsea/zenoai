@@ -88,6 +88,15 @@ export interface ProjectTypeDetection {
   scores: Partial<Record<ProjectType, number>>;
 }
 
+export interface PrimaryFlowVerdictCap {
+  score: 4;
+  label: 'Concerning';
+  verdict: 'Not yet';
+  risk: 'High risk';
+  reason: string;
+  finding: LaunchFinding;
+}
+
 export interface DevtoolScan {
   binTargets: SourceFinding[];
   missingBinTargets: SourceFinding[];
@@ -1077,6 +1086,28 @@ function buildLaunchFindings(scan: Omit<ShipReadinessScan, 'projectType' | 'proj
   return findings.slice(0, 12);
 }
 
+function isPrimaryFlowBlockingFinding(finding: LaunchFinding): boolean {
+  if (finding.category !== 'hard_blocker' && finding.category !== 'hard_blocker_candidate') return false;
+  if (finding.severity !== 'High' && finding.severity !== 'Critical') return false;
+  if (!['confirmed', 'likely', 'needs_verification'].includes(finding.certainty)) return false;
+
+  return /capture|waitlist|preorder|email capture|capture endpoint|cta|bin target|entrypoint|install command|auth flow|protected route|data write|billing|webhook|checkout|payment|destructive action/i.test(finding.issue);
+}
+
+export function getPrimaryFlowVerdictCap(scan: ShipReadinessScan): PrimaryFlowVerdictCap | null {
+  const finding = scan.launchFindings.find(isPrimaryFlowBlockingFinding);
+  if (!finding) return null;
+
+  return {
+    score: 4,
+    label: 'Concerning',
+    verdict: 'Not yet',
+    risk: 'High risk',
+    reason: `${finding.issue}: ${finding.evidence}`,
+    finding,
+  };
+}
+
 export async function runShipReadinessScan(root: string, reports: FileReport[]): Promise<ShipReadinessScan> {
   const packageScan = await readPackage(root);
   const sourceFiles = collectSourceFiles(root);
@@ -1204,7 +1235,7 @@ export async function runShipReadinessScan(root: string, reports: FileReport[]):
     if (executable && WEBHOOK_SIGNATURE_RE.test(source)) {
       pushFinding(saasDashboard.webhookSignatureSignals, path, 'Webhook signature verification signal detected.');
     }
-    if (executable && /chart|table|filter|date range|datatable|export|metrics|analytics|reports/i.test(source)) {
+    if (executable && /chart|table|filter|date range|datatable|\bexport\s+(?:csv|report|data)\b|metrics|analytics|reports/i.test(source)) {
       pushFinding(saasDashboard.dashboardSignals, path, 'Dashboard chart/table/filter/export/reporting signal detected.');
     }
     if (executable && DASHBOARD_STATE_RE.test(source)) {
