@@ -9,6 +9,16 @@ const betaSignupUrl = import.meta.env.PUBLIC_BETA_SIGNUP_URL;
   <main>
     <h1>Zeno is a ship-readiness copilot for vibe-coded apps.</h1>
     <p>Zeno can review billing, checkout, subscriptions, and webhooks in your real app.</p>
+    <div class="hero-command" aria-label="Run Zeno command">
+      <code>npx zenoai</code>
+      <button type="button" data-copy-command="npx zenoai" aria-label="Copy npx zenoai command">Copy</button>
+    </div>
+    <div role="tablist" aria-label="Check examples">
+      <button type="button" role="tab" aria-selected="true" aria-controls="panel-ship" data-check-tab="ship">Ship readiness</button>
+      <button type="button" role="tab" aria-selected="false" aria-controls="panel-security" data-check-tab="security">Security</button>
+    </div>
+    <section id="panel-ship">Ship readiness report example.</section>
+    <section id="panel-security">Security scan example.</section>
 
     <form id="beta-form">
       <label>

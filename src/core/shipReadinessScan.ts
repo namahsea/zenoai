@@ -351,12 +351,22 @@ function hasAnyMetadata(source: string): boolean {
 }
 
 function buttonHasExplicitBehavior(button: string, source: string): boolean {
-  if (/onClick\s*=|type\s*=\s*["']submit["']|formAction\s*=|disabled\b|popovertarget\s*=|data-[\w-]*(?:toggle|target|state|open)\s*=/i.test(button)) return true;
+  if (/onClick\s*=|type\s*=\s*["']submit["']|formAction\s*=|disabled\b|popovertarget\s*=|role\s*=\s*["']tab["']|data-copy-command\s*=|data-[\w-]*(?:button|toggle|target|state|open|tab|copy|command|menu)\s*=/i.test(button)) return true;
   const ariaControls = button.match(/aria-controls\s*=\s*["']([^"']+)["']/i)?.[1];
   if (ariaControls && new RegExp(`id\\s*=\\s*["']${ariaControls.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}["']`, 'i').test(source)) return true;
   const id = button.match(/id\s*=\s*["']([^"']+)["']/i)?.[1];
   if (id && new RegExp(`getElementById\\(\\s*["']${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}["']\\s*\\)|querySelector\\(\\s*["']#${id.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}["']\\s*\\)`, 'i').test(source)) return true;
   return false;
+}
+
+function isUtilityButton(button: string): boolean {
+  return /role\s*=\s*["']tab["']|aria-controls\s*=|aria-expanded\s*=|aria-label\s*=\s*["'][^"']*(?:copy|menu|navigation|tab|close|open)[^"']*["']|data-copy-command\s*=|data-[\w-]*(?:button|toggle|target|state|open|tab|copy|command|menu)\s*=/i.test(button);
+}
+
+function isPrimaryCtaButton(button: string, source: string): boolean {
+  if (isUtilityButton(button)) return false;
+  const compactButton = button.replace(/\s+/g, ' ');
+  return CTA_TEXT_RE.test(compactButton) || CTA_TEXT_RE.test(source);
 }
 
 function hasExecutableBillingEvidence(path: string, source: string, role: FileRole, deps: Set<string>): boolean {
@@ -1226,13 +1236,14 @@ export async function runShipReadinessScan(root: string, reports: FileReport[]):
       .filter(button => !button.includes('\\'));
     if (buttonMatches.length > 0) pushFinding(buttons, path, `${buttonMatches.length} button element(s) found.`);
     for (const button of buttonMatches) {
-      if (CTA_TEXT_RE.test(source)) {
+      const primaryCtaButton = isPrimaryCtaButton(button, source);
+      if (primaryCtaButton) {
         pushFinding(ctaSignals, path, `CTA-oriented copy detected near button(s): ${button.slice(0, 120)}`);
         if (NAVIGATION_RE.test(button) || buttonHasExplicitBehavior(button, source)) {
           pushFinding(ctaWiringSignals, path, `CTA button has an explicit behavior signal: ${button.slice(0, 120)}`);
         }
       }
-      if (!buttonHasExplicitBehavior(button, source)) {
+      if (primaryCtaButton && !buttonHasExplicitBehavior(button, source)) {
         pushFinding(suspiciousButtons, path, `Button may lack explicit behavior: ${button.slice(0, 120)}`);
       }
     }
