@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8">
+    <title>Sellmo — Join the beta</title>
+  </head>
+  <body>
+    <header>
+      <button class="nav-cta">Join Beta</button>
+    </header>
+    <main>
+      <section class="beta-signup">
+        <h1>Sell online with Sellmo</h1>
+        <p>Join the beta for early access.</p>
+        <form action="/.netlify/functions/send-confirmation" method="post">
+          <input name="email" type="email" required>
+          <button type="submit">Join the beta</button>
+        </form>
+      </section>
+    </main>
+    <script src="script.js"></script>
+  </body>
+</html>

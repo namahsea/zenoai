@@ -1,6 +1,6 @@
 import { existsSync, readdirSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { basename, extname, join, relative, sep } from 'node:path';
+import { basename, dirname, extname, join, relative, sep } from 'node:path';
 import type { FileReport } from './analyst.js';
 import { isHighConsequencePath } from './riskSignals.js';
 import type { ProjectType } from '../types.js';
@@ -141,6 +141,7 @@ export interface ShipReadinessScan {
   buttons: SourceFinding[];
   suspiciousButtons: SourceFinding[];
   suspiciousLinks: SourceFinding[];
+  externalScriptReferences: SourceFinding[];
   networkCalls: SourceFinding[];
   metadata: {
     hasMetadata: boolean;
@@ -169,7 +170,7 @@ export interface ShipReadinessScan {
 
 const SOURCE_EXTS = new Set(['.ts', '.tsx', '.js', '.jsx', '.astro', '.html']);
 const PROJECT_FILE_EXTS = new Set(['.ts', '.tsx', '.js', '.jsx', '.astro', '.html', '.md', '.mdx']);
-const SKIP_DIRS = new Set(['node_modules', 'dist', '.git', '.next', 'coverage', 'out', 'build', 'fixtures']);
+const SKIP_DIRS = new Set(['node_modules', 'dist', '.git', '.next', '.zeno', 'coverage', 'out', 'build', 'fixtures']);
 const TEST_RE = /(?:^|[./_-])(?:test|tests|spec|__tests__)(?:[./_-]|$)|\.(?:test|spec)\.[tj]sx?$/i;
 const CAPTURE_COPY_RE = /\b(waitlist|join(?:ed)?|pre[\s-]?order|early access|request access|book demo|contact sales|contact us|sign up|signup|get started)\b/i;
 const EMAIL_CAPTURE_RE = /type\s*=\s*["']email["']|name\s*=\s*["']email["']|placeholder\s*=\s*["'][^"']*(email|waitlist|join|pre[\s-]?order|access|demo|contact)[^"']*["']|\b(email|setEmail)\b/i;
@@ -202,6 +203,29 @@ const WEBHOOK_SIGNATURE_RE = /\b(?:constructEvent|webhookSignature|signature|svi
 const DASHBOARD_STATE_RE = /\b(?:loading|error|empty|skeleton|spinner|fallback|no data|not found|isLoading|isError|isPending|Suspense)\b/i;
 const DESTRUCTIVE_ACTION_RE = /\b(?:delete|remove|revoke|disconnect|archive|reset|cancel subscription|downgrade)\b/i;
 const DESTRUCTIVE_CONFIRM_RE = /\b(?:confirm|confirmation|dialog|modal|alert|undo|are you sure)\b/i;
+
+function hasEnvValidationSignal(source: string): boolean {
+  if (ENV_VALIDATION_RE.test(source)) return true;
+
+  const envAliasRe = /\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*process\.env(?:\.[A-Za-z_$][\w$]*|\[\s*['"][^'"]+['"]\s*\])/g;
+  for (const match of source.matchAll(envAliasRe)) {
+    const alias = match[1].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (new RegExp(`\\bif\\s*\\(\\s*!\\s*${alias}\\b`).test(source)) return true;
+  }
+
+  return false;
+}
+
+function localExternalScriptSources(source: string): string[] {
+  const scripts: string[] = [];
+  const scriptRe = /<script\b[^>]*\bsrc\s*=\s*["']([^"']+)["'][^>]*>/gi;
+  for (const match of source.matchAll(scriptRe)) {
+    const scriptSrc = match[1].split(/[?#]/, 1)[0];
+    if (!scriptSrc || /^(?:https?:)?\/\//i.test(scriptSrc) || !/\.(?:mjs|cjs|js)$/i.test(scriptSrc)) continue;
+    scripts.push(scriptSrc);
+  }
+  return scripts;
+}
 
 function detectPackageManager(root: string): PackageScan['packageManager'] {
   if (existsSync(join(root, 'pnpm-lock.yaml'))) return 'pnpm';
@@ -461,6 +485,7 @@ function buildActionFlows(args: {
   ctaSignals: SourceFinding[];
   ctaWiringSignals: SourceFinding[];
   suspiciousButtons: SourceFinding[];
+  externalScriptReferences: SourceFinding[];
 }): ActionFlowFinding[] {
   const flows: ActionFlowFinding[] = [];
 
@@ -514,18 +539,27 @@ function buildActionFlows(args: {
 
   if (args.ctaSignals.length > 0 && args.suspiciousButtons.length > 0) {
     const suspiciousCount = Math.min(args.suspiciousButtons.length, 5);
+    const ctaPath = args.suspiciousButtons[0].path;
+    const externalScriptReference = args.externalScriptReferences.find(reference => reference.path === ctaPath);
+    const externalJsUnverified = Boolean(externalScriptReference);
     flows.push({
       type: 'cta_navigation',
       label: 'Primary CTA navigation',
-      status: args.ctaWiringSignals.length > 0 ? 'needs_verification' : 'needs_verification',
-      severity: 'High',
+      status: 'needs_verification',
+      severity: externalJsUnverified ? 'Medium' : 'High',
       certainty: 'needs_verification',
       evidence: [
         `${args.ctaSignals[0].path}: ${args.ctaSignals[0].evidence}`,
-        `${suspiciousCount} prominent CTA button${suspiciousCount === 1 ? '' : 's'} lack obvious href/onClick/form submit behavior.`,
+        externalJsUnverified
+          ? `${externalScriptReference?.path}: ${externalScriptReference?.evidence}`
+          : `${suspiciousCount} prominent CTA button${suspiciousCount === 1 ? '' : 's'} lack obvious href/onClick/form submit behavior.`,
       ],
-      risk: 'Users may click a primary CTA and nothing happens, or the action may not reach a real destination.',
-      fix: 'Wire each primary CTA to a real destination, form submission, router navigation, download, install command, or disabled state.',
+      risk: externalJsUnverified
+        ? 'CTA behavior in external JavaScript could not be verified statically.'
+        : 'Users may click a primary CTA and nothing happens, or the action may not reach a real destination.',
+      fix: externalJsUnverified
+        ? 'Manually verify the CTA in the browser. Cross-file selector correlation is planned for v0.3.2.'
+        : 'Wire each primary CTA to a real destination, form submission, router navigation, download, install command, or disabled state.',
     });
   }
 
@@ -966,8 +1000,11 @@ function buildLaunchFindings(scan: Omit<ShipReadinessScan, 'projectType' | 'proj
     if (['cli_install', 'cli_entrypoint', 'filesystem_write_safety', 'config_loading', 'command_execution'].includes(flow.type)) continue;
 
     const captureEndpointNeedsVerification = flow.type === 'email_capture' && /environment-configured endpoint|endpoint env var|production signup|production endpoint|production url/i.test(flow.evidence.join(' ') + ' ' + flow.fix);
+    const externalJsCtaUnverified = flow.type === 'cta_navigation' && /external JavaScript could not be verified statically/i.test(flow.risk);
     const issue = flow.type === 'cta_navigation'
-      ? 'Primary CTA behavior needs verification'
+      ? externalJsCtaUnverified
+        ? 'CTA behavior in external JavaScript could not be verified statically.'
+        : 'Primary CTA behavior needs verification'
       : flow.type === 'email_capture'
         ? captureEndpointNeedsVerification
           ? 'Primary capture endpoint needs production proof'
@@ -987,7 +1024,7 @@ function buildLaunchFindings(scan: Omit<ShipReadinessScan, 'projectType' | 'proj
                     : 'Primary capture flow appears unwired';
 
     findings.push({
-      category: flow.type === 'dashboard_load' ? 'soft_blocker' : 'hard_blocker_candidate',
+      category: flow.type === 'dashboard_load' || externalJsCtaUnverified ? 'soft_blocker' : 'hard_blocker_candidate',
       issue,
       severity: flow.severity,
       certainty: flow.certainty,
@@ -1130,6 +1167,7 @@ export async function runShipReadinessScan(root: string, reports: FileReport[]):
   const buttons: SourceFinding[] = [];
   const suspiciousButtons: SourceFinding[] = [];
   const suspiciousLinks: SourceFinding[] = [];
+  const externalScriptReferences: SourceFinding[] = [];
   const networkCalls: SourceFinding[] = [];
   const analytics: SourceFinding[] = [];
   const envUsage: SourceFinding[] = [];
@@ -1234,7 +1272,7 @@ export async function runShipReadinessScan(root: string, reports: FileReport[]):
     if (executable && USER_ERROR_RE.test(source)) {
       pushFinding(saasDashboard.errorHandlingSignals, path, 'Error handling or user-facing error signal detected.');
     }
-    if (executable && ENV_VALIDATION_RE.test(source)) {
+    if (executable && hasEnvValidationSignal(source)) {
       pushFinding(saasDashboard.envValidationSignals, path, 'Environment validation or helpful missing-env failure signal detected.');
     }
     if (hasExecutableBillingEvidence(path, source, role, packageDeps)) {
@@ -1308,6 +1346,17 @@ export async function runShipReadinessScan(root: string, reports: FileReport[]):
 
     const badLinks = source.match(/href\s*=\s*["'](?:#|javascript:void\(0\)|)["']/gi) ?? [];
     for (const link of badLinks) pushFinding(suspiciousLinks, path, `Suspicious href found: ${link}`);
+
+    if (extname(path).toLowerCase() === '.html') {
+      for (const scriptSrc of localExternalScriptSources(source)) {
+        const referencedPath = scriptSrc.startsWith('/')
+          ? join(root, scriptSrc.slice(1))
+          : join(dirname(fullPath), scriptSrc);
+        if (existsSync(referencedPath)) {
+          pushFinding(externalScriptReferences, path, `References external JavaScript file ${scriptSrc}; cross-file CTA wiring cannot yet be verified.`);
+        }
+      }
+    }
 
     if (includesAny(source, [/fetch\s*\(/, /axios\./, /XMLHttpRequest/, /navigator\.sendBeacon/, /['"]use server['"]/])) {
       pushFinding(networkCalls, path, 'Network call or server action signal detected.');
@@ -1394,6 +1443,7 @@ export async function runShipReadinessScan(root: string, reports: FileReport[]):
     buttons,
     suspiciousButtons,
     suspiciousLinks,
+    externalScriptReferences,
     networkCalls,
     metadata,
     publicFiles,
@@ -1422,6 +1472,7 @@ export async function runShipReadinessScan(root: string, reports: FileReport[]):
       ctaSignals,
       ctaWiringSignals,
       suspiciousButtons,
+      externalScriptReferences,
     }),
     ...buildSaasDashboardActionFlows(saasDashboard),
   ];

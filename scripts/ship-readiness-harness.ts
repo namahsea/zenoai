@@ -4,7 +4,7 @@ import { getPrimaryFlowVerdictCap, runShipReadinessScan } from '../src/core/ship
 import type { FileReport } from '../src/core/analyst.js';
 
 const SOURCE_EXTS = new Set(['.ts', '.tsx', '.js', '.jsx', '.astro', '.html']);
-const SKIP_DIRS = new Set(['node_modules', 'dist', '.git', '.next', 'coverage', 'out', 'build']);
+const SKIP_DIRS = new Set(['node_modules', 'dist', '.git', '.next', '.zeno', 'coverage', 'out', 'build']);
 
 interface HarnessExpectation {
   name: string;
@@ -98,6 +98,36 @@ const expectations: HarnessExpectation[] = [
       {
         label: 'static HTML landing page does not require a manual prompt',
         check: ({ scan }) => scan.projectTypeDetection.shouldAskUser === false,
+      },
+      {
+        label: 'unwired CTA without external JavaScript remains a hard blocker candidate',
+        check: ({ scan }) => scan.launchFindings.some(finding =>
+          finding.issue === 'Primary CTA behavior needs verification' && finding.category === 'hard_blocker_candidate'),
+      },
+    ],
+  },
+  {
+    name: 'landing-sellmo-external-js',
+    root: join(fixtureRoot, 'landing-sellmo-external-js'),
+    projectType: 'landing_page',
+    includes: ['CTA behavior in external JavaScript could not be verified statically.'],
+    excludes: [
+      'Primary CTA behavior needs verification',
+      'Required environment variables need validation',
+    ],
+    custom: [
+      {
+        label: 'external JavaScript CTA is not a hard blocker',
+        check: ({ scan }) => !scan.launchFindings.some(finding =>
+          finding.issue.includes('CTA') && (finding.category === 'hard_blocker' || finding.category === 'hard_blocker_candidate')),
+      },
+      {
+        label: 'external JavaScript CTA does not create a primary-flow verdict cap',
+        check: ({ scan }) => getPrimaryFlowVerdictCap(scan) === null,
+      },
+      {
+        label: 'environment variable alias validation is detected',
+        check: ({ scan }) => scan.saasDashboard.envValidationSignals.some(signal => signal.path.includes('send-confirmation')),
       },
     ],
   },

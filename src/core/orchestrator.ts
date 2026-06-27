@@ -183,6 +183,7 @@ Rules:
 - If a capture endpoint uses a known form/email provider signal or an owned API/server action, keep the finding softer or omit it unless there is other evidence of failure.
 - If capture flow submission logic is partial or unclear, keep it separate from CTA behavior and use certainty needs_verification.
 - If suspicious buttons or CTAs are found but behavior is not proven broken, use wording like "Primary CTA behavior needs verification" or "Potentially unwired button". Do not say "CTA is broken" unless evidence proves it.
+- If launchFindings says "CTA behavior in external JavaScript could not be verified statically.", keep it as a Medium needs_verification soft blocker. Do not promote it to a hard blocker, do not cap the verdict because of it, and do not force public launch or paid traffic to No solely because cross-file selector correlation is unavailable.
 - Soft blocker means launch quality is weaker but the main flow can still work.
 - Do not classify these as hardBlockers by default: missing OG/social metadata, no analytics, no robots.txt, no sitemap, no tests for a landing page, general performance concern without measured failure, or general accessibility gap.
 - For landing pages, classify missing OG/social metadata as a softBlocker, Medium, confirmed. Classify no analytics as a softBlocker, Medium, confirmed. Classify missing robots.txt or sitemap as a softBlocker, Low or Medium, confirmed. Classify no tests/no test script as a codeOwnershipRisk, Low, confirmed.

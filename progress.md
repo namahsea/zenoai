@@ -21,6 +21,9 @@ This branch is the v0.3.1 precision pass for ship-readiness. It keeps the v0.3.0
   - ignores tab controls
   - ignores menu buttons with `aria-controls`
   - keeps true CTA buttons with no behavior as `Needs verification`
+  - downgrades static HTML CTAs to soft manual verification when the page loads external JavaScript
+- Detects environment validation through local aliases such as `const apiKey = process.env.KEY; if (!apiKey)`
+- Cross-file HTML selector-to-JavaScript handler correlation remains a known limitation and is scheduled for v0.3.2
 - Tightened dashboard checks:
   - normal TypeScript `export` statements no longer count as dashboard export actions
   - dashboard-state checks no longer bleed into landing-page fixtures

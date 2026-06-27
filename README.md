@@ -180,6 +180,8 @@ Each finding includes certainty:
 
 `Confirmed`, `Likely`, `Needs verification`, or `Inferred`.
 
+Known limitation: Zeno can detect that static HTML loads external JavaScript, but it does not yet correlate CSS selectors across HTML and JavaScript files. CTA wiring in external JavaScript is reported as a soft manual-verification item rather than a launch blocker. Cross-file selector correlation is planned for v0.3.2.
+
 
 ## 📁 Local Reports
 
@@ -261,6 +263,7 @@ npx zenoai help
 | Security check | ✅ Live | Local static scan for obvious security risk signals |
 | Safe cleanup | ✅ Live | Guarded refactoring with validation and final boundary review |
 | Large-file splitting | ✅ Live | Static extraction for oversized files |
+| Cross-file CTA correlation | 🔜 v0.3.2 | Correlate HTML selectors with event handlers in external JavaScript |
 | Test runner wiring | 🔜 Planned | Detect Jest/Vitest/Mocha and run generated tests |
 | Smarter splitting | 🔜 Planned | Decompose large files into components, hooks, and modules |
 | Hosted access | 🔜 Planned | Use Zeno without bringing your own API key |
