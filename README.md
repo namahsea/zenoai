@@ -11,6 +11,9 @@
   <a href="https://twitter.com/zeno_cli"><img src="https://img.shields.io/badge/Twitter-%40zeno__cli-1DA1F2?logo=twitter&logoColor=white" alt="Twitter"/></a>
 </p>
 
+> [!IMPORTANT]
+> **Zeno is currently in a public testing phase.** Results may include false positives or miss project-specific risks. Review its findings and any proposed code changes before relying on them in production.
+
 **Zeno** is a ship-readiness copilot for vibe-coded JavaScript and TypeScript apps. It traces critical user flows, finds launch blockers, and turns repository evidence into a clear ship/no-ship verdict.
 
 ⚡ **One command.** No setup. No hand-holding.
