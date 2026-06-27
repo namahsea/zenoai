@@ -1214,6 +1214,29 @@ export async function runOrchestrator(opts: RunOptions): Promise<void> {
     }
     console.log('');
 
+    const shipScan = isShipReadinessAction(opts.action)
+      ? await runShipReadinessScan(root, allFiles)
+      : null;
+    const projectTypeResolution = shipScan
+      ? await resolveProjectType(root, shipScan)
+      : undefined;
+    if (shipScan && projectTypeResolution) {
+      shipScan.projectType = projectTypeResolution.projectType;
+    }
+
+    const userMessage = isShipReadinessAction(opts.action)
+      ? `Review intent: ship_readiness
+
+Selected project type: ${projectTypeResolution?.projectType ?? shipScan?.projectType ?? 'unknown'}
+Project type source: ${projectTypeResolution?.source ?? 'detected'}
+
+Project file summary (${files.length} files):
+${JSON.stringify(files, null, 2)}
+
+Deterministic ship-readiness scan:
+${JSON.stringify(shipScan, null, 2)}`
+      : `Project file summary (${files.length} files):\n\n${JSON.stringify(files, null, 2)}`;
+
     const LATE_MESSAGES = [
       'mapping dependencies…',
       'weighing your risks…',
@@ -1254,29 +1277,6 @@ export async function runOrchestrator(opts: RunOptions): Promise<void> {
       clearInterval(tickInterval);
       if (lateTimer) clearTimeout(lateTimer);
     }
-
-    const shipScan = isShipReadinessAction(opts.action)
-      ? await runShipReadinessScan(root, allFiles)
-      : null;
-    const projectTypeResolution = shipScan
-      ? await resolveProjectType(root, shipScan)
-      : undefined;
-    if (shipScan && projectTypeResolution) {
-      shipScan.projectType = projectTypeResolution.projectType;
-    }
-
-    const userMessage = isShipReadinessAction(opts.action)
-      ? `Review intent: ship_readiness
-
-Selected project type: ${projectTypeResolution?.projectType ?? shipScan?.projectType ?? 'unknown'}
-Project type source: ${projectTypeResolution?.source ?? 'detected'}
-
-Project file summary (${files.length} files):
-${JSON.stringify(files, null, 2)}
-
-Deterministic ship-readiness scan:
-${JSON.stringify(shipScan, null, 2)}`
-      : `Project file summary (${files.length} files):\n\n${JSON.stringify(files, null, 2)}`;
 
     let raw: string;
     try {
