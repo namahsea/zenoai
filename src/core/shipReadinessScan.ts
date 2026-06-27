@@ -551,7 +551,7 @@ function buildActionFlows(args: {
       evidence: [
         `${args.ctaSignals[0].path}: ${args.ctaSignals[0].evidence}`,
         externalJsUnverified
-          ? `${externalScriptReference?.path}: ${externalScriptReference?.evidence}`
+          ? externalScriptReference?.evidence ?? 'Cross-file CTA wiring was not verified statically.'
           : `${suspiciousCount} prominent CTA button${suspiciousCount === 1 ? '' : 's'} lack obvious href/onClick/form submit behavior.`,
       ],
       risk: externalJsUnverified
@@ -1353,7 +1353,7 @@ export async function runShipReadinessScan(root: string, reports: FileReport[]):
           ? join(root, scriptSrc.slice(1))
           : join(dirname(fullPath), scriptSrc);
         if (existsSync(referencedPath)) {
-          pushFinding(externalScriptReferences, path, `References external JavaScript file ${scriptSrc}; cross-file CTA wiring cannot yet be verified.`);
+          pushFinding(externalScriptReferences, path, `${path} references ${scriptSrc}, but cross-file CTA wiring was not verified statically.`);
         }
       }
     }

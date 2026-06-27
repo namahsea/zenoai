@@ -122,6 +122,11 @@ const expectations: HarnessExpectation[] = [
           finding.issue.includes('CTA') && (finding.category === 'hard_blocker' || finding.category === 'hard_blocker_candidate')),
       },
       {
+        label: 'external JavaScript CTA evidence does not claim wiring exists',
+        check: ({ scan }) => scan.launchFindings.some(finding =>
+          finding.evidence.includes('index.html references script.js, but cross-file CTA wiring was not verified statically.')),
+      },
+      {
         label: 'external JavaScript CTA does not create a primary-flow verdict cap',
         check: ({ scan }) => getPrimaryFlowVerdictCap(scan) === null,
       },
