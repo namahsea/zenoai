@@ -3,7 +3,7 @@ import { extname, join, relative, sep } from 'node:path';
 import { getPrimaryFlowVerdictCap, runShipReadinessScan } from '../src/core/shipReadinessScan.js';
 import type { FileReport } from '../src/core/analyst.js';
 
-const SOURCE_EXTS = new Set(['.ts', '.tsx', '.js', '.jsx', '.astro']);
+const SOURCE_EXTS = new Set(['.ts', '.tsx', '.js', '.jsx', '.astro', '.html']);
 const SKIP_DIRS = new Set(['node_modules', 'dist', '.git', '.next', 'coverage', 'out', 'build']);
 
 interface HarnessExpectation {
@@ -86,6 +86,21 @@ function hasEvidence(context: HarnessContext, expected: string): boolean {
 const fixtureRoot = join(process.cwd(), 'fixtures', 'ship-readiness');
 
 const expectations: HarnessExpectation[] = [
+  {
+    name: 'landing-static-html',
+    root: join(fixtureRoot, 'landing-static-html'),
+    projectType: 'landing_page',
+    custom: [
+      {
+        label: 'static HTML landing page has high confidence',
+        check: ({ scan }) => scan.projectTypeDetection.confidenceLabel === 'high',
+      },
+      {
+        label: 'static HTML landing page does not require a manual prompt',
+        check: ({ scan }) => scan.projectTypeDetection.shouldAskUser === false,
+      },
+    ],
+  },
   {
     name: 'landing-astro-env-capture',
     root: join(fixtureRoot, 'landing-astro-env-capture'),

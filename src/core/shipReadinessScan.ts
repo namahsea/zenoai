@@ -167,8 +167,8 @@ export interface ShipReadinessScan {
   evidence: string[];
 }
 
-const SOURCE_EXTS = new Set(['.ts', '.tsx', '.js', '.jsx', '.astro']);
-const PROJECT_FILE_EXTS = new Set(['.ts', '.tsx', '.js', '.jsx', '.astro', '.md', '.mdx']);
+const SOURCE_EXTS = new Set(['.ts', '.tsx', '.js', '.jsx', '.astro', '.html']);
+const PROJECT_FILE_EXTS = new Set(['.ts', '.tsx', '.js', '.jsx', '.astro', '.html', '.md', '.mdx']);
 const SKIP_DIRS = new Set(['node_modules', 'dist', '.git', '.next', 'coverage', 'out', 'build', 'fixtures']);
 const TEST_RE = /(?:^|[./_-])(?:test|tests|spec|__tests__)(?:[./_-]|$)|\.(?:test|spec)\.[tj]sx?$/i;
 const CAPTURE_COPY_RE = /\b(waitlist|join(?:ed)?|pre[\s-]?order|early access|request access|book demo|contact sales|contact us|sign up|signup|get started)\b/i;
