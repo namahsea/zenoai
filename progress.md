@@ -2,6 +2,94 @@
 
 ## Current branch progress (2026-06-27)
 
+Branch: `reduce-ship-readiness-false-positives`
+
+This branch is the v0.3.1 precision pass for ship-readiness. It keeps the v0.3.0 project-aware review system, but reduces false positives and adds a repeatable harness so future scanner changes are tested against known landing-page, devtool, SaaS, and dashboard cases.
+
+### Ship-readiness precision fixes
+
+- Added file-role awareness so Zeno treats runtime/layout/config files differently from docs, draft copy, tests, fixtures, and marketing notes
+- Prevented copy-only signals from becoming hard blockers:
+  - billing/checkout/webhook words in marketing copy no longer create payment-flow blockers
+  - delete/reset/revoke words in landing-page copy no longer create destructive-action blockers
+  - docs mentioning `npx zenoai` no longer conflict with a private website package name
+- Improved Astro/static metadata detection:
+  - detects plain `<meta property="og:*">` tags
+  - detects Twitter card metadata in Astro/layout HTML
+- Improved CTA precision:
+  - ignores copy buttons
+  - ignores tab controls
+  - ignores menu buttons with `aria-controls`
+  - keeps true CTA buttons with no behavior as `Needs verification`
+  - downgrades static HTML CTAs to soft manual verification when the page loads external JavaScript
+- Detects environment validation through local aliases such as `const apiKey = process.env.KEY; if (!apiKey)`
+- Cross-file HTML selector-to-JavaScript handler correlation remains a known limitation and is scheduled for v0.3.2
+- Tightened dashboard checks:
+  - normal TypeScript `export` statements no longer count as dashboard export actions
+  - dashboard-state checks no longer bleed into landing-page fixtures
+- Tightened destructive-action checks:
+  - destructive-action risks now require app surfaces such as protected routes, auth, data writes, or billing/payment flows
+
+### Capture-flow verdict behavior
+
+- Split capture findings more precisely:
+  - no submission path -> `Waitlist/email capture appears unwired`
+  - env-only external endpoint -> `Primary capture endpoint needs production proof`
+  - owned API/provider route -> no primary-flow cap when validation/error handling are visible
+- Added deterministic primary-flow verdict cap:
+  - primary-flow hard blockers/candidates now cap the overall verdict at `Not yet [High risk]`
+  - applies before terminal rendering and local report saving
+  - does not apply to metadata, analytics, no tests, large files, or general ownership risks
+- Public launch and paid traffic are forced to `No` while a primary action flow still needs proof
+
+### Ship-readiness harness
+
+- Added:
+  - `npm run harness:ship-readiness`
+- The harness runs deterministic ship-readiness scans against fixtures and asserts expected findings are present or absent
+- Added/updated fixtures:
+  - `landing-astro-env-capture`
+  - `landing-unwired-bad`
+  - `landing-verified-good`
+  - `landing-next-good`
+  - `devtool-good`
+  - `devtool-bad`
+  - `saas-good`
+  - `saas-bad`
+  - `dashboard-bad`
+- Harness now verifies:
+  - Astro OG/Twitter metadata is detected
+  - env-only primary capture endpoint creates a verdict cap
+  - unwired capture flow creates a verdict cap
+  - verified owned capture route does not create a cap
+  - utility buttons do not become CTA blockers
+  - billing/destructive/package-copy false positives stay suppressed
+  - devtool/SaaS/dashboard checks still fire where expected
+
+### Real-project checks
+
+- Damon LP now reports the real launch-path risks:
+  - primary capture flow appears unwired
+  - CTA behavior needs verification
+  - metadata, analytics, mobile performance, file size, browser guards, and tests stay in softer categories
+- `zenoai_site` now avoids previous false positives:
+  - no missing OG metadata false positive
+  - no missing analytics false positive
+  - no billing/checkout false positive from copy
+  - no package-name mismatch from `npx zenoai`
+  - no CTA false positive from header/menu/copy/tab buttons
+- `zenoai_site` correctly reports:
+  - `Primary capture endpoint needs production proof`
+  - verdict capped to `Not yet [High risk]` until a real production submission is verified
+
+### Verification
+
+- `npm run build` passes
+- `npm run harness:ship-readiness` passes
+- `git diff --check` passes
+
+## v0.3.0 published branch progress (2026-06-27)
+
 Branch: `add-devtool-ship-readiness`
 
 Zeno's ship-readiness flow has moved from a general AI review into a project-aware launch-readiness system with deterministic evidence, bounded terminal output, and local full reports.

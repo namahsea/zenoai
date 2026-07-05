@@ -1,0 +1,17 @@
+{
+  "name": "landing-verified-good",
+  "private": true,
+  "scripts": {
+    "build": "next build",
+    "test": "vitest"
+  },
+  "dependencies": {
+    "next": "^15.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "posthog-js": "^1.200.0"
+  },
+  "devDependencies": {
+    "vitest": "^2.0.0"
+  }
+}

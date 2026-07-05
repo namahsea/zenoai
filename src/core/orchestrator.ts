@@ -22,7 +22,7 @@ import { confirm, select } from '@inquirer/prompts';
 import { runDiffer } from './differ.js';
 import { runStaticSplit } from './splitter.js';
 import { runSecurityCheck } from './securityCheck.js';
-import { runShipReadinessScan } from './shipReadinessScan.js';
+import { getPrimaryFlowVerdictCap, runShipReadinessScan } from './shipReadinessScan.js';
 import type { LaunchFinding, ShipReadinessScan } from './shipReadinessScan.js';
 import { manualOpenCommand, openFileInBrowser } from './localReportViewer.js';
 import { ZENO_MODELS } from './models.js';
@@ -152,6 +152,9 @@ Rules:
 - Do not recommend refactoring first if a main CTA, form, route, build/lint status, or payment/auth/data path is broken or unverified.
 - Every hardBlocker, softBlocker, and codeOwnershipRisk must cite evidence from the deterministic scan or file metadata.
 - The deterministic scan includes launchFindings with suggested category, severity, and certainty. Treat these as the default classification unless stronger evidence in the scan clearly contradicts them.
+- Evidence quality matters. Copy-only signals, draft docs, marketing copy, or product briefs can inform context, but they do not prove an executable user flow exists.
+- Do not promote keyword-only findings into hard blockers. Hard blockers require executable evidence such as route/component code, API/server code, package dependencies, config, concrete unwired markup, or missing files.
+- If deterministic evidence conflicts with concrete code evidence, prefer concrete code evidence and downgrade or omit the weaker finding.
 - The deterministic scan may include actionFlows. These answer: "What is the user supposed to do, and can that action complete?" Treat action-flow findings as first-class launch evidence.
 - Do not collapse email/waitlist/preorder/contact/demo capture flows into generic CTA issues. If actionFlows or launchFindings show a capture flow risk, report it separately from generic CTA/navigation behavior.
 - If something is inferred, say "appears" or "not detected" instead of claiming certainty.
@@ -165,16 +168,22 @@ Rules:
 - For devtool projects, describe browser API findings as "Node runtime/browser API risk". Do not use frontend framework rendering terminology. Only report this risk when deterministic scan evidence shows actual runtime code using window/document/navigator, not when those terms appear in strings, prompts, types, or scanner regexes.
 - If package.json bin points to a missing file, treat "CLI bin target does not exist" as a Critical confirmed hard blocker.
 - If docs mention the wrong npx/npm/pnpm/bun install package, report "Install command may be wrong" as High likely.
+- Only report install-command mismatch when the reviewed project itself is the CLI/devtool package or the deterministic scan includes an install-command launch finding. Do not compare a private website package name to a public npm package named in docs or marketing copy.
 - If filesystem write/delete operations appear without dry-run, confirmation, backup, allowlist, diff, or rollback signals, report "Filesystem writes need safety guard" as a High needs_verification code ownership risk unless the scan evidence clearly shows it can directly damage user files during the main command path.
 - For saas_app projects, prioritise in this order: can users sign up/log in, protected routes are guarded, data writes are validated and handled safely, required env vars are validated, billing/payment/webhooks are safe if present, destructive actions are confirmed, loading/error/empty states exist, and code ownership risks are manageable.
 - For dashboard projects, prioritise in this order: dashboard data can load, loading/error/empty states are handled, tables/charts are usable, filters/export actions are safe, admin/protected routes are guarded, and destructive actions are confirmed.
 - For saas_app or dashboard projects, treat "Auth flow needs verification", "Protected routes need verification", "Data write needs validation/error handling", "Billing/webhook flow needs verification", and "Destructive action needs confirmation" as High needs_verification hard blocker candidates when present in deterministic launchFindings.
 - For saas_app or dashboard projects, treat "Required environment variables need validation" and "Dashboard states need verification" as soft blockers unless deterministic evidence proves a production break.
 - For ecommerce or backend_api projects, prioritise auth, permissions, data writes, payment flow, webhooks, error states, tests, and security.
+- For billing/payment/webhook findings, marketing text that mentions billing, checkout, subscriptions, or webhooks is not enough. Only report billing/payment risk when executable payment evidence exists, such as payment dependencies, checkout/API routes, webhook handlers, payment env vars, or provider SDK usage.
+- For Astro or static sites, Open Graph metadata can appear as plain <meta property="og:*"> tags in layouts. Do not report missing OG metadata if deterministic metadata evidence says openGraph=yes.
 - Hard blocker means real users cannot complete the main flow, production can break, or launch would be misleading or unsafe. Only use hardBlockers for: main user action broken or very likely broken; form appears unwired; primary CTA appears unwired; build/lint/test command fails if actually executed or known; page likely cannot render; required env/config missing; auth/payment/database/webhook/data-write risk; severe mobile breakage; broken route/navigation.
 - If an email/waitlist/preorder/contact/demo capture flow is detected and no clear submission path exists, include a first-class hardBlocker candidate: "Waitlist/email capture appears unwired" or "Primary capture flow appears unwired" with severity High and certainty likely. Use risk text like: "Users may think they joined the waitlist, preordered, requested access, or contacted the team, but nothing is actually captured."
+- If a primary landing-page capture flow has a submission path but depends only on an environment-configured external endpoint, with no local API route/server action/provider proof in the repo, do not call it unwired. Report "Primary capture endpoint needs production proof" as High needs_verification. Public launch should be No or Maybe only after production proof; paid traffic should be No until a real production submission is verified.
+- If a capture endpoint uses a known form/email provider signal or an owned API/server action, keep the finding softer or omit it unless there is other evidence of failure.
 - If capture flow submission logic is partial or unclear, keep it separate from CTA behavior and use certainty needs_verification.
 - If suspicious buttons or CTAs are found but behavior is not proven broken, use wording like "Primary CTA behavior needs verification" or "Potentially unwired button". Do not say "CTA is broken" unless evidence proves it.
+- If launchFindings says "CTA behavior in external JavaScript could not be verified statically.", keep it as a Medium needs_verification soft blocker. Preserve the evidence wording "index.html references script.js, but cross-file CTA wiring was not verified statically." Do not claim the wiring lives in script.js. Do not promote it to a hard blocker, do not cap the verdict because of it, and do not force public launch or paid traffic to No solely because cross-file selector correlation is unavailable.
 - Soft blocker means launch quality is weaker but the main flow can still work.
 - Do not classify these as hardBlockers by default: missing OG/social metadata, no analytics, no robots.txt, no sitemap, no tests for a landing page, general performance concern without measured failure, or general accessibility gap.
 - For landing pages, classify missing OG/social metadata as a softBlocker, Medium, confirmed. Classify no analytics as a softBlocker, Medium, confirmed. Classify missing robots.txt or sitemap as a softBlocker, Low or Medium, confirmed. Classify no tests/no test script as a codeOwnershipRisk, Low, confirmed.
@@ -183,6 +192,7 @@ Rules:
 - Do not put large files, no tests, browser API usage, or mixed concerns in hardBlockers unless they directly break launch. These usually belong in codeOwnershipRisks.
 - Score/label mapping: 1-3 Critical, 4-5 Concerning, 6-7 Fair, 8-10 Good.
 - Prefer moving a finding to softBlockers or codeOwnershipRisks over inflating severity. Precision is more important than sounding dramatic.
+- If deterministic launchFindings contain a High or Critical hard blocker/candidate for a primary action flow, the overall verdict must not be "Ship with caution" or "Safe to ship". Use at most "Not yet" / High risk until the primary action flow is verified.
 - safestNextStep must be the safest next step for launch readiness, not broad cleanup. For landing pages with action-flow risks, the safest next step is to verify and wire the primary action flow first: capture flow and main CTAs before metadata, analytics, or refactoring.
 - Return valid JSON only. No markdown. No extra text before or after JSON.`;
 
@@ -366,6 +376,40 @@ function fallbackReportFromScan(scan: ShipReadinessScan): HealthReport {
       ? `Verify and wire the primary action flow first: ${primaryActionRisk.issue}. Do not refactor before the launch path works.`
       : 'Verify the main user path manually before refactoring or sending public traffic.',
   };
+}
+
+function applyPrimaryFlowVerdictCap(report: HealthReport, scan: ShipReadinessScan | null): HealthReport {
+  if (!scan) return report;
+  const cap = getPrimaryFlowVerdictCap(scan);
+  if (!cap || report.score <= cap.score) return report;
+
+  const cappedReport: HealthReport = {
+    ...report,
+    score: cap.score,
+    label: cap.label,
+    summary: report.summary,
+    publicLaunch: {
+      answer: 'No',
+      reason: `Public launch should wait until this primary action flow is verified: ${cap.finding.issue}.`,
+    },
+    paidTraffic: {
+      answer: 'No',
+      reason: `Paid traffic should wait until this primary action flow is verified: ${cap.finding.issue}.`,
+    },
+  };
+
+  if (!cappedReport.privatePreview || cappedReport.privatePreview.answer === 'Yes') {
+    cappedReport.privatePreview = {
+      answer: 'Maybe',
+      reason: `Private preview is reasonable only after manually checking: ${cap.finding.issue}.`,
+    };
+  }
+
+  if (cappedReport.founderSummary && !cappedReport.founderSummary.toLowerCase().includes('not yet')) {
+    cappedReport.founderSummary = `${cappedReport.founderSummary} Zeno is capping the verdict at Not yet because the primary action flow still needs proof.`;
+  }
+
+  return cappedReport;
 }
 
 function localTimestamp(date = new Date()): string {
@@ -1171,6 +1215,29 @@ export async function runOrchestrator(opts: RunOptions): Promise<void> {
     }
     console.log('');
 
+    const shipScan = isShipReadinessAction(opts.action)
+      ? await runShipReadinessScan(root, allFiles)
+      : null;
+    const projectTypeResolution = shipScan
+      ? await resolveProjectType(root, shipScan)
+      : undefined;
+    if (shipScan && projectTypeResolution) {
+      shipScan.projectType = projectTypeResolution.projectType;
+    }
+
+    const userMessage = isShipReadinessAction(opts.action)
+      ? `Review intent: ship_readiness
+
+Selected project type: ${projectTypeResolution?.projectType ?? shipScan?.projectType ?? 'unknown'}
+Project type source: ${projectTypeResolution?.source ?? 'detected'}
+
+Project file summary (${files.length} files):
+${JSON.stringify(files, null, 2)}
+
+Deterministic ship-readiness scan:
+${JSON.stringify(shipScan, null, 2)}`
+      : `Project file summary (${files.length} files):\n\n${JSON.stringify(files, null, 2)}`;
+
     const LATE_MESSAGES = [
       'mapping dependencies…',
       'weighing your risks…',
@@ -1211,29 +1278,6 @@ export async function runOrchestrator(opts: RunOptions): Promise<void> {
       clearInterval(tickInterval);
       if (lateTimer) clearTimeout(lateTimer);
     }
-
-    const shipScan = isShipReadinessAction(opts.action)
-      ? await runShipReadinessScan(root, allFiles)
-      : null;
-    const projectTypeResolution = shipScan
-      ? await resolveProjectType(root, shipScan)
-      : undefined;
-    if (shipScan && projectTypeResolution) {
-      shipScan.projectType = projectTypeResolution.projectType;
-    }
-
-    const userMessage = isShipReadinessAction(opts.action)
-      ? `Review intent: ship_readiness
-
-Selected project type: ${projectTypeResolution?.projectType ?? shipScan?.projectType ?? 'unknown'}
-Project type source: ${projectTypeResolution?.source ?? 'detected'}
-
-Project file summary (${files.length} files):
-${JSON.stringify(files, null, 2)}
-
-Deterministic ship-readiness scan:
-${JSON.stringify(shipScan, null, 2)}`
-      : `Project file summary (${files.length} files):\n\n${JSON.stringify(files, null, 2)}`;
 
     let raw: string;
     try {
@@ -1298,6 +1342,7 @@ ${JSON.stringify(shipScan, null, 2)}`
       if (projectTypeResolution) {
         report.projectType = projectTypeResolution.projectType;
       }
+      report = applyPrimaryFlowVerdictCap(report, shipScan);
       const localReportPath = await saveShipReadinessLocalReport({
         root,
         report,
@@ -1607,7 +1652,7 @@ function shortIssueLabel(issue: string): string {
   if (/analytics/.test(lower)) return 'No analytics';
   if (/heavy|animation|media|performance|mobile/.test(lower)) return 'Mobile perf risk';
   if (/large file|monolith|lines/.test(lower)) return 'Large page file';
-  if (/browser global|browser api|node runtime/.test(lower)) return 'Node/browser API risk';
+  if (/browser global|browser api|node runtime|hydration|ssr/.test(lower)) return 'Browser API guard risk';
   if (/test/.test(lower)) return 'No tests';
   if (/robots|sitemap/.test(lower)) return 'SEO files missing';
   if (/bin target/.test(lower)) return 'Bin target missing';

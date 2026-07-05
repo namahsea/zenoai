@@ -1,0 +1,10 @@
+{
+  "name": "zeno-private-site",
+  "private": true,
+  "scripts": {
+    "build": "astro check"
+  },
+  "dependencies": {
+    "astro": "^5.0.0"
+  }
+}
